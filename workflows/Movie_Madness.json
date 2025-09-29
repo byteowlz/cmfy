@@ -1,0 +1,308 @@
+{
+  "5": {
+    "inputs": {
+      "width": [
+        "70",
+        0
+      ],
+      "height": [
+        "71",
+        0
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "Empty Latent Image"
+    }
+  },
+  "6": {
+    "inputs": {
+      "text": [
+        "28",
+        0
+      ],
+      "clip": [
+        "11",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Prompt)"
+    }
+  },
+  "8": {
+    "inputs": {
+      "samples": [
+        "13",
+        0
+      ],
+      "vae": [
+        "10",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "9": {
+    "inputs": {
+      "filename_prefix": "MovieMadness/Tommy",
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "10": {
+    "inputs": {
+      "vae_name": "ae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "11": {
+    "inputs": {
+      "clip_name1": "t5xxl_fp16.safetensors",
+      "clip_name2": "clip_l.safetensors",
+      "type": "flux",
+      "device": "default"
+    },
+    "class_type": "DualCLIPLoader",
+    "_meta": {
+      "title": "DualCLIPLoader"
+    }
+  },
+  "12": {
+    "inputs": {
+      "unet_name": "flux1-dev.safetensors",
+      "weight_dtype": "fp8_e4m3fn"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "13": {
+    "inputs": {
+      "noise": [
+        "25",
+        0
+      ],
+      "guider": [
+        "22",
+        0
+      ],
+      "sampler": [
+        "16",
+        0
+      ],
+      "sigmas": [
+        "17",
+        0
+      ],
+      "latent_image": [
+        "5",
+        0
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "SamplerCustomAdvanced"
+    }
+  },
+  "16": {
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "KSamplerSelect"
+    }
+  },
+  "17": {
+    "inputs": {
+      "scheduler": "simple",
+      "steps": 25,
+      "denoise": 1,
+      "model": [
+        "61",
+        0
+      ]
+    },
+    "class_type": "BasicScheduler",
+    "_meta": {
+      "title": "BasicScheduler"
+    }
+  },
+  "22": {
+    "inputs": {
+      "model": [
+        "61",
+        0
+      ],
+      "conditioning": [
+        "60",
+        0
+      ]
+    },
+    "class_type": "BasicGuider",
+    "_meta": {
+      "title": "BasicGuider"
+    }
+  },
+  "25": {
+    "inputs": {
+      "noise_seed": 544171896724466
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "RandomNoise"
+    }
+  },
+  "28": {
+    "inputs": {
+      "string": "Sks man as a funny vampire "
+    },
+    "class_type": "String Literal",
+    "_meta": {
+      "title": "String Literal"
+    }
+  },
+  "60": {
+    "inputs": {
+      "guidance": 4,
+      "conditioning": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "FluxGuidance",
+    "_meta": {
+      "title": "FluxGuidance"
+    }
+  },
+  "61": {
+    "inputs": {
+      "max_shift": 1.15,
+      "base_shift": 0.5,
+      "width": [
+        "70",
+        0
+      ],
+      "height": [
+        "71",
+        0
+      ],
+      "model": [
+        "73",
+        0
+      ]
+    },
+    "class_type": "ModelSamplingFlux",
+    "_meta": {
+      "title": "ModelSamplingFlux"
+    }
+  },
+  "70": {
+    "inputs": {
+      "int": 1280
+    },
+    "class_type": "Int Literal",
+    "_meta": {
+      "title": "Width"
+    }
+  },
+  "71": {
+    "inputs": {
+      "int": 1600
+    },
+    "class_type": "Int Literal",
+    "_meta": {
+      "title": "Height"
+    }
+  },
+  "72": {
+    "inputs": {
+      "lora_name": "Tommy_Flux_Lora.safetensors",
+      "strength_model": 1,
+      "model": [
+        "12",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "LoraLoaderModelOnly"
+    }
+  },
+  "73": {
+    "inputs": {
+      "lora_name": "Flux_realism.safetensors",
+      "strength_model": 0.46,
+      "model": [
+        "72",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "LoraLoaderModelOnly"
+    }
+  },
+  "78": {
+    "inputs": {
+      "prompt": "Generate an image description for an action movie poster from the 1980, depicting a man with a beard and wearing glasses. \n\nExample:\n\nMovie Poster for a 1980s action movie titled \"Mr. Schlong\" depicting a redhead man with a beard and wearing glasses as a cyborg. the subtitle reads \"Winter is coming\". The color palette of the poster is predominantly dark blues and purples, with bursts of bright neon colors to represent the high-tech world Sisk Man inhabits. The overall design has a gritty, urban feel, with bold lines and sharp angles that evoke a sense of raw energy. The movie credits are displayed at the bottom of the poster.\n\nJust respond with the description, no introduction",
+      "debug": "enable",
+      "url": "http://localhost:11434",
+      "model": "llama3.2:latest",
+      "keep_alive": 60,
+      "format": "text",
+      "filter_thinking": true
+    },
+    "class_type": "OllamaGenerate",
+    "_meta": {
+      "title": "Ollama Generate (deprecated)"
+    }
+  },
+  "79": {
+    "inputs": {
+      "text_0": "Poster for the 1985 action film \"Vigilante Justice\", depicting a ruggedly handsome man in his mid-40s with a thick beard and wire-rimmed glasses, clad in a worn leather jacket and sunglasses. The color palette is a gritty mix of muted browns, greys, and taupes, evoking a sense of grittiness and intensity. The title \"Vigilante Justice\" is emblazoned across the top in bold, metallic letters, while the tagline \"One man's quest for vengeance will leave no one unscathed\" is etched below in smaller text.",
+      "text": [
+        "78",
+        0
+      ]
+    },
+    "class_type": "ShowText|pysssss",
+    "_meta": {
+      "title": "Show Text 🐍"
+    }
+  },
+  "80": {
+    "inputs": {
+      "find1": "man",
+      "replace1": "sks man",
+      "find2": "",
+      "replace2": "",
+      "find3": "",
+      "replace3": "",
+      "text": [
+        "79",
+        0
+      ]
+    },
+    "class_type": "CR Text Replace",
+    "_meta": {
+      "title": "🔤 CR Text Replace"
+    }
+  }
+}

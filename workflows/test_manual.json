@@ -1,0 +1,36 @@
+{
+  "prompt": {
+    "3": {
+      "inputs": {
+        "seed": "${SEED}",
+        "steps": "${STEPS}",
+        "cfg": "${CFG}",
+        "text": "test"
+      },
+      "class_type": "KSampler"
+    },
+    "6": {
+      "inputs": {
+        "text": "${PROMPT}"
+      },
+      "class_type": "CLIPTextEncode"
+    }
+  },
+  "variables": {
+    "SEED": {
+      "default": "12345",
+      "description": "Random seed"
+    },
+    "STEPS": {
+      "default": "20",
+      "description": "Number of steps"
+    },
+    "CFG": {
+      "default": "7.0"
+    },
+    "PROMPT": {
+      "default": "a beautiful landscape",
+      "description": "Main prompt text"
+    }
+  }
+}

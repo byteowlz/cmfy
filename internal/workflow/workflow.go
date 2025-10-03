@@ -13,12 +13,17 @@ import (
 	"strings"
 )
 
+type VariableMetadata struct {
+	Default     string `json:"default"`
+	Description string `json:"description,omitempty"`
+}
+
 // Load loads a workflow prompt JSON from name or path.
 // If name is bare, reads from baseDir/<name>.json.
+// Returns the prompt map, resolved path, variables metadata, and error.
 func Load(baseDir, nameOrPath string) (map[string]interface{}, string, error) {
 	p := nameOrPath
 	if !fileExists(p) {
-		// try relative to baseDir with .json
 		if !strings.Contains(filepath.Base(p), ".") {
 			p = filepath.Join(baseDir, nameOrPath+".json")
 		} else {
@@ -33,8 +38,6 @@ func Load(baseDir, nameOrPath string) (map[string]interface{}, string, error) {
 	if err := json.Unmarshal(b, &m); err != nil {
 		return nil, "", fmt.Errorf("invalid workflow JSON: %w", err)
 	}
-	// Some exports nest prompt under "prompt"; some are raw prompt map.
-	// Check if this looks like a prompt map (has numeric string keys)
 	hasNumericKeys := false
 	for k := range m {
 		if _, err := strconv.Atoi(k); err == nil {
@@ -49,6 +52,56 @@ func Load(baseDir, nameOrPath string) (map[string]interface{}, string, error) {
 		return pr, p, nil
 	}
 	return nil, "", errors.New("unsupported workflow JSON format: expected prompt map or {prompt: {...}}")
+}
+
+func LoadWithVars(baseDir, nameOrPath string) (map[string]interface{}, string, map[string]VariableMetadata, error) {
+	p := nameOrPath
+	if !fileExists(p) {
+		if !strings.Contains(filepath.Base(p), ".") {
+			p = filepath.Join(baseDir, nameOrPath+".json")
+		} else {
+			p = filepath.Join(baseDir, nameOrPath)
+		}
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, "", nil, fmt.Errorf("invalid workflow JSON: %w", err)
+	}
+
+	vars := make(map[string]VariableMetadata)
+	if varsRaw, ok := m["variables"].(map[string]interface{}); ok {
+		for k, v := range varsRaw {
+			if vm, ok := v.(map[string]interface{}); ok {
+				meta := VariableMetadata{}
+				if def, ok := vm["default"].(string); ok {
+					meta.Default = def
+				}
+				if desc, ok := vm["description"].(string); ok {
+					meta.Description = desc
+				}
+				vars[k] = meta
+			}
+		}
+	}
+
+	hasNumericKeys := false
+	for k := range m {
+		if _, err := strconv.Atoi(k); err == nil {
+			hasNumericKeys = true
+			break
+		}
+	}
+	if hasNumericKeys {
+		return m, p, vars, nil
+	}
+	if pr, ok := m["prompt"].(map[string]interface{}); ok {
+		return pr, p, vars, nil
+	}
+	return nil, "", nil, errors.New("unsupported workflow JSON format: expected prompt map or {prompt: {...}}")
 }
 
 func fileExists(p string) bool {
@@ -80,7 +133,22 @@ func List(baseDir string) ([]string, error) {
 }
 
 // ApplyVars replaces ${KEY} in string inputs across the prompt.
+// User-provided vars override defaults from varDefaults.
 func ApplyVars(prompt map[string]interface{}, vars map[string]string) {
+	ApplyVarsWithDefaults(prompt, vars, nil)
+}
+
+func ApplyVarsWithDefaults(prompt map[string]interface{}, vars map[string]string, varDefaults map[string]VariableMetadata) {
+	merged := make(map[string]string)
+
+	for k, v := range varDefaults {
+		merged[k] = v.Default
+	}
+
+	for k, v := range vars {
+		merged[k] = v
+	}
+
 	re := regexp.MustCompile(`\$\{([A-Za-z0-9_]+)\}`)
 	for _, node := range prompt {
 		if nm, ok := node.(map[string]interface{}); ok {
@@ -91,14 +159,14 @@ func ApplyVars(prompt map[string]interface{}, vars map[string]string) {
 						nv := re.ReplaceAllStringFunc(vv, func(s string) string {
 							key := re.FindStringSubmatch(s)
 							if len(key) == 2 {
-								if r, ok := vars[key[1]]; ok {
+								if r, ok := merged[key[1]]; ok {
 									return r
 								}
 							}
 							return s
 						})
 						if fullMatch := re.FindStringSubmatch(vv); len(fullMatch) == 2 && fullMatch[0] == vv {
-							varVal := vars[fullMatch[1]]
+							varVal := merged[fullMatch[1]]
 							if iv, ok := toInt(varVal); ok {
 								in[k] = iv
 							} else if fv, ok := toFloat(varVal); ok {
@@ -217,4 +285,31 @@ func toBool(s string) (bool, bool) {
 		return false, true
 	}
 	return false, false
+}
+
+func Save(path string, prompt map[string]interface{}, vars map[string]VariableMetadata) error {
+	out := map[string]interface{}{
+		"prompt": prompt,
+	}
+
+	if len(vars) > 0 {
+		varsMap := make(map[string]interface{})
+		for k, v := range vars {
+			vm := map[string]interface{}{
+				"default": v.Default,
+			}
+			if v.Description != "" {
+				vm["description"] = v.Description
+			}
+			varsMap[k] = vm
+		}
+		out["variables"] = varsMap
+	}
+
+	b, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(path, b, 0o644)
 }

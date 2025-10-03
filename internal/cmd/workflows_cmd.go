@@ -3,11 +3,13 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"cmfy/internal/config"
 	"cmfy/internal/workflow"
 
+	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
 )
 
@@ -49,6 +51,13 @@ var workflowsAssignCmd = &cobra.Command{
 	RunE:  workflowsAssign,
 }
 
+var workflowsAddCmd = &cobra.Command{
+	Use:   "add <source.json> [name]",
+	Short: "Add workflow with interactive variable setup",
+	Args:  cobra.RangeArgs(1, 2),
+	RunE:  workflowsAdd,
+}
+
 func init() {
 	rootCmd.AddCommand(workflowsCmd)
 	workflowsCmd.AddCommand(workflowsListCmd)
@@ -56,6 +65,7 @@ func init() {
 	workflowsCmd.AddCommand(workflowsInspectCmd)
 	workflowsCmd.AddCommand(workflowsAliasesCmd)
 	workflowsCmd.AddCommand(workflowsAssignCmd)
+	workflowsCmd.AddCommand(workflowsAddCmd)
 }
 
 func workflowsList(cmd *cobra.Command, args []string) error {
@@ -105,16 +115,35 @@ func workflowsInspect(cmd *cobra.Command, args []string) error {
 	if wf, ok := resolveAliasMaybe(nameOrPath); ok {
 		nameOrPath = wf
 	}
-	pr, resolved, err := workflow.Load(cfg.WorkflowsDir, nameOrPath)
+	pr, resolved, vars, err := workflow.LoadWithVars(cfg.WorkflowsDir, nameOrPath)
 	if err != nil {
 		return err
 	}
 	infos, _ := workflow.Inspect(pr)
 	fmt.Printf("# %s\n", resolved)
+
+	if len(vars) > 0 {
+		fmt.Println("\nVariables:")
+		varNames := make([]string, 0, len(vars))
+		for k := range vars {
+			varNames = append(varNames, k)
+		}
+		for _, k := range varNames {
+			v := vars[k]
+			if v.Description != "" {
+				fmt.Printf("  %s = %q (%s)\n", k, v.Default, v.Description)
+			} else {
+				fmt.Printf("  %s = %q\n", k, v.Default)
+			}
+		}
+		fmt.Println()
+	}
+
+	fmt.Println("Nodes:")
 	for _, n := range infos {
-		fmt.Printf("%s: %s\n", n.ID, n.ClassType)
+		fmt.Printf("  %s: %s\n", n.ID, n.ClassType)
 		if len(n.Inputs) > 0 {
-			fmt.Printf("  inputs: %s\n", strings.Join(n.Inputs, ", "))
+			fmt.Printf("    inputs: %s\n", strings.Join(n.Inputs, ", "))
 		}
 	}
 	return nil
@@ -166,5 +195,112 @@ func workflowsAssign(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Printf("Assigned %s -> %s\n", alias, wf)
+	return nil
+}
+
+func workflowsAdd(cmd *cobra.Command, args []string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+
+	sourcePath := args[0]
+	var targetName string
+	if len(args) > 1 {
+		targetName = args[1]
+	} else {
+		targetName = strings.TrimSuffix(filepath.Base(sourcePath), filepath.Ext(sourcePath))
+	}
+
+	if !strings.HasSuffix(targetName, ".json") {
+		targetName += ".json"
+	}
+
+	prompt, _, err := workflow.Load("", sourcePath)
+	if err != nil {
+		return err
+	}
+
+	candidates := workflow.SuggestVariables(prompt)
+
+	if len(candidates) == 0 {
+		fmt.Println("No variable candidates found in workflow")
+		targetPath := filepath.Join(cfg.WorkflowsDir, targetName)
+		if err := workflow.Save(targetPath, prompt, nil); err != nil {
+			return err
+		}
+		fmt.Printf("Workflow saved to %s\n", targetPath)
+		return nil
+	}
+
+	fmt.Printf("Found %d potential variables\n\n", len(candidates))
+
+	vars := make(map[string]workflow.VariableMetadata)
+
+	for _, c := range candidates {
+		fmt.Printf("Node %s (%s) input %q\n", c.NodeID, c.ClassType, c.InputName)
+		fmt.Printf("Current value: %v\n", c.CurrentValue)
+
+		convertPrompt := promptui.Prompt{
+			Label:   "Convert to variable? (y/n)",
+			Default: "y",
+		}
+
+		result, err := convertPrompt.Run()
+		if err != nil {
+			fmt.Println()
+			continue
+		}
+		result = strings.ToLower(strings.TrimSpace(result))
+		if result == "n" || result == "no" {
+			fmt.Println()
+			continue
+		}
+
+		varNamePrompt := promptui.Prompt{
+			Label:   "Variable name",
+			Default: c.SuggestedVar,
+		}
+
+		varName, err := varNamePrompt.Run()
+		if err != nil {
+			return err
+		}
+
+		defaultValue := fmt.Sprintf("%v", c.CurrentValue)
+		defaultPrompt := promptui.Prompt{
+			Label:   "Default value",
+			Default: defaultValue,
+		}
+
+		defaultVal, err := defaultPrompt.Run()
+		if err != nil {
+			return err
+		}
+
+		descPrompt := promptui.Prompt{
+			Label: "Description (optional)",
+		}
+
+		desc, _ := descPrompt.Run()
+
+		vars[varName] = workflow.VariableMetadata{
+			Default:     defaultVal,
+			Description: desc,
+		}
+
+		if err := workflow.SetPath(prompt, fmt.Sprintf("%s.inputs.%s", c.NodeID, c.InputName), fmt.Sprintf("${%s}", varName)); err != nil {
+			return err
+		}
+
+		fmt.Println()
+	}
+
+	targetPath := filepath.Join(cfg.WorkflowsDir, targetName)
+	if err := workflow.Save(targetPath, prompt, vars); err != nil {
+		return err
+	}
+
+	fmt.Printf("Workflow saved to %s with %d variables\n", targetPath, len(vars))
 	return nil
 }

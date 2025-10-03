@@ -1,7 +1,7 @@
 {
   "3": {
     "inputs": {
-      "seed": 630149881668908,
+      "seed": "${SEED}",
       "steps": 20,
       "cfg": 2.5,
       "sampler_name": "euler",
@@ -77,7 +77,7 @@
   },
   "60": {
     "inputs": {
-      "filename_prefix": "ComfyUI",
+      "filename_prefix": "${OUTPUT}",
       "images": [
         "8",
         0

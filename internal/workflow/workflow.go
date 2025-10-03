@@ -97,7 +97,18 @@ func ApplyVars(prompt map[string]interface{}, vars map[string]string) {
 							}
 							return s
 						})
-						in[k] = nv
+						if fullMatch := re.FindStringSubmatch(vv); len(fullMatch) == 2 && fullMatch[0] == vv {
+							varVal := vars[fullMatch[1]]
+							if iv, ok := toInt(varVal); ok {
+								in[k] = iv
+							} else if fv, ok := toFloat(varVal); ok {
+								in[k] = fv
+							} else {
+								in[k] = nv
+							}
+						} else {
+							in[k] = nv
+						}
 					}
 				}
 			}

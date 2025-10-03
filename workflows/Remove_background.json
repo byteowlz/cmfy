@@ -24,7 +24,7 @@
   },
   "3": {
     "inputs": {
-      "image": "00.png"
+      "image": "${IMAGE}"
     },
     "class_type": "LoadImage",
     "_meta": {

@@ -50,7 +50,7 @@
   },
   "9": {
     "inputs": {
-      "filename_prefix": "${OUTPUT}",
+      "filename_prefix": "${OUTPUT}_with_background",
       "images": [
         "8",
         0
@@ -72,7 +72,7 @@
   },
   "11": {
     "inputs": {
-      "clip_name1": "t5xxl_fp16.safetensors",
+      "clip_name1": "t5xxl_fp8_e4m3fn.safetensors",
       "clip_name2": "clip_l.safetensors",
       "type": "flux",
       "device": "default"
@@ -171,10 +171,7 @@
   },
   "28": {
     "inputs": {
-      "string": [
-        "80",
-        0
-      ]
+      "string": "${PROMPT}"
     },
     "class_type": "String Literal",
     "_meta": {
@@ -236,7 +233,7 @@
   },
   "72": {
     "inputs": {
-      "lora_name": "Tommy_Flux_Lora.safetensors",
+      "lora_name": "filmfotos.safetensors",
       "strength_model": 1,
       "model": [
         "12",
@@ -250,8 +247,8 @@
   },
   "73": {
     "inputs": {
-      "lora_name": "Flux_realism.safetensors",
-      "strength_model": 0.46,
+      "lora_name": "cinematik_flux50epoch.safetensors",
+      "strength_model": 1,
       "model": [
         "72",
         0
@@ -262,50 +259,40 @@
       "title": "LoraLoaderModelOnly"
     }
   },
-  "78": {
-    "inputs": {
-      "prompt": "Generate an image description for an action movie poster from the 1980, ${PROMPT}. \n\nExample:\n\nMovie Poster for a 1980s action movie titled \"Mr. Schlong\" depicting a redhead man with a beard and wearing glasses as a cyborg. the subtitle reads \"Winter is coming\". The color palette of the poster is predominantly dark blues and purples, with bursts of bright neon colors to represent the high-tech world Sisk Man inhabits. The overall design has a gritty, urban feel, with bold lines and sharp angles that evoke a sense of raw energy. The movie credits are displayed at the bottom of the poster.\n\nJust respond with the description, no introduction",
-      "debug": "enable",
-      "url": "http://localhost:11434",
-      "model": "llama3.2:latest",
-      "keep_alive": 60,
-      "format": "text",
-      "filter_thinking": true
-    },
-    "class_type": "OllamaGenerate",
+  "83": {
+    "inputs": {},
+    "class_type": "BRIA_RMBG_ModelLoader_Zho",
     "_meta": {
-      "title": "Ollama Generate (deprecated)"
+      "title": "🧹BRIA_RMBG Model Loader"
     }
   },
-  "79": {
+  "84": {
     "inputs": {
-      "text_0": "Poster for the 1985 action film \"Vigilante Justice\", depicting a ruggedly handsome man in his mid-40s with a thick beard and wire-rimmed glasses, clad in a worn leather jacket and sunglasses. The color palette is a gritty mix of muted browns, greys, and taupes, evoking a sense of grittiness and intensity. The title \"Vigilante Justice\" is emblazoned across the top in bold, metallic letters, while the tagline \"One man's quest for vengeance will leave no one unscathed\" is etched below in smaller text.",
-      "text": [
-        "78",
+      "rmbgmodel": [
+        "83",
+        0
+      ],
+      "image": [
+        "8",
         0
       ]
     },
-    "class_type": "ShowText|pysssss",
+    "class_type": "BRIA_RMBG_Zho",
     "_meta": {
-      "title": "Show Text 🐍"
+      "title": "🧹BRIA RMBG"
     }
   },
-  "80": {
+  "85": {
     "inputs": {
-      "find1": "man",
-      "replace1": "sks man",
-      "find2": "",
-      "replace2": "",
-      "find3": "",
-      "replace3": "",
-      "text": [
-        "79",
+      "filename_prefix": "${OUTPUT}_without_background",
+      "images": [
+        "84",
         0
       ]
     },
-    "class_type": "CR Text Replace",
+    "class_type": "SaveImage",
     "_meta": {
-      "title": "🔤 CR Text Replace"
+      "title": "Save Image"
     }
   }
 }

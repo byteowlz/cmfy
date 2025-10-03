@@ -50,7 +50,7 @@
   },
   "9": {
     "inputs": {
-      "filename_prefix": "Pixel_Art/Pixel_Art_",
+      "filename_prefix": "${OUTPUT}",
       "images": [
         "8",
         0
@@ -162,7 +162,7 @@
   },
   "25": {
     "inputs": {
-      "noise_seed": 53193609492797
+      "noise_seed": "${SEED}"
     },
     "class_type": "RandomNoise",
     "_meta": {
@@ -284,7 +284,7 @@
   },
   "85": {
     "inputs": {
-      "filename_prefix": "Pixel_Art/Pixel_Art_Unfake_",
+      "filename_prefix": "${OUTPUT}_unfake",
       "images": [
         "84",
         0

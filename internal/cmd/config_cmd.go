@@ -25,10 +25,17 @@ var configPathCmd = &cobra.Command{
 	RunE:  configPath,
 }
 
+var configOutputCmd = &cobra.Command{
+	Use:   "output",
+	Short: "Show configured output directory path",
+	RunE:  configOutput,
+}
+
 func init() {
 	rootCmd.AddCommand(configCmd)
 	configCmd.AddCommand(configInitCmd)
 	configCmd.AddCommand(configPathCmd)
+	configCmd.AddCommand(configOutputCmd)
 }
 
 func configInit(cmd *cobra.Command, args []string) error {
@@ -46,5 +53,14 @@ func configPath(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Println(p)
+	return nil
+}
+
+func configOutput(cmd *cobra.Command, args []string) error {
+	cfg, err := icfg.Load()
+	if err != nil {
+		return err
+	}
+	fmt.Println(cfg.OutputDir)
 	return nil
 }

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
 	icfg "cmfy/internal/config"
 
@@ -31,11 +32,18 @@ var configOutputCmd = &cobra.Command{
 	RunE:  configOutput,
 }
 
+var configPrintCmd = &cobra.Command{
+	Use:   "print",
+	Short: "Print configuration file content",
+	RunE:  configPrint,
+}
+
 func init() {
 	rootCmd.AddCommand(configCmd)
 	configCmd.AddCommand(configInitCmd)
 	configCmd.AddCommand(configPathCmd)
 	configCmd.AddCommand(configOutputCmd)
+	configCmd.AddCommand(configPrintCmd)
 }
 
 func configInit(cmd *cobra.Command, args []string) error {
@@ -62,5 +70,18 @@ func configOutput(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Println(cfg.OutputDir)
+	return nil
+}
+
+func configPrint(cmd *cobra.Command, args []string) error {
+	p, err := icfg.Path()
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return err
+	}
+	fmt.Print(string(data))
 	return nil
 }

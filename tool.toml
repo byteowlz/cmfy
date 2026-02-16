@@ -1,0 +1,129 @@
+# tool.toml - cmfy metadata for byteowlz.com/toolz/cmfy
+
+"$schema" = "https://raw.githubusercontent.com/byteowlz/schemas/refs/heads/main/govnr/tool.schema.json"
+
+name = "cmfy"
+title = "cmfy"
+tagline = "A flexible ComfyUI CLI"
+
+description = """
+A fast, flexible command-line tool to run ComfyUI workflows. Load JSON workflows from your filesystem, apply template variables and targeted overrides, submit them to a running ComfyUI server, and save generated outputs locally.
+
+Supports rich templating via placeholders, precise node-level overrides, asset uploads for images/masks/inputs, first-class sampler/refiner flags, standard workflow aliases, and full configuration via TOML config file.
+
+Built for both humans and AI agents. Use the CLI for quick generation, pipe JSON for automation, or integrate into scripted pipelines.
+"""
+
+language = "go"
+category = "toolz"
+version = "0.1.0"
+license = "MIT"
+
+# ============================================================================
+# Installation
+# ============================================================================
+
+[install]
+homebrew = "byteowlz/tap/cmfy"
+aur = "cmfy"
+aur_bin = "cmfy-bin"
+
+# ============================================================================
+# Links
+# ============================================================================
+
+[links]
+github = "https://github.com/byteowlz/cmfy"
+
+# ============================================================================
+# Features
+# ============================================================================
+
+[[features]]
+title = "Workflow Management"
+description = "List, inspect, and run ComfyUI workflows from your filesystem with a single command"
+
+[[features]]
+title = "Rich Templating"
+description = "Use ${KEY} placeholders across string inputs with global and per-workflow template variables"
+
+[[features]]
+title = "Precise Overrides"
+description = "Target any node input with --set <nodeID>.inputs.<name>=<value> with automatic type coercion"
+
+[[features]]
+title = "Asset Uploads"
+description = "Upload images, masks, and inputs with automatic ${IMAGE}, ${MASK}, ${INPUT} variable expansion"
+
+[[features]]
+title = "First-Class Sampler Flags"
+description = "Dedicated flags for --sampler, --scheduler, --steps, --cfg, --denoise and more"
+
+[[features]]
+title = "Standard Workflow Aliases"
+description = "Map well-known aliases like txt2img, img2img, canny2img to workflow files for quick access"
+
+# ============================================================================
+# Examples
+# ============================================================================
+
+[[examples]]
+title = "Quick Start"
+language = "bash"
+code = """
+# Check server connection
+cmfy server ping
+
+# List available workflows
+cmfy workflows list
+
+# Run a workflow
+cmfy run -w txt2img --prompt "a sunset over mountains"
+"""
+
+[[examples]]
+title = "Overrides & Templates"
+language = "bash"
+code = """
+# Override specific node inputs
+cmfy run -w my_workflow --set 12.inputs.steps=40 --set 12.inputs.cfg=7.5
+
+# Use template variables
+cmfy run -w txt2img --var MODEL=sdxl.safetensors --var PROMPT="a cute cat"
+
+# Upload an image for img2img
+cmfy run -w img2img --image input.png --denoise 0.6
+"""
+
+[[examples]]
+title = "Configuration"
+language = "bash"
+code = """
+# Initialize default config
+cmfy config init
+
+# Show config path
+cmfy config path
+
+# Inspect a workflow
+cmfy workflows inspect my_workflow
+"""
+
+# ============================================================================
+# Media
+# ============================================================================
+
+[media]
+# icon = "assets/icon.svg"
+# screenshot = "banner.png"
+
+# ============================================================================
+# Metadata
+# ============================================================================
+
+[meta]
+keywords = ["comfyui", "cli", "stable-diffusion", "image-generation", "ai", "workflows"]
+platforms = ["linux", "macos", "windows"]
+related = ["hmr", "byt"]
+status = "alpha"
+listed = true

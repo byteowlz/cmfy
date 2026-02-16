@@ -10,7 +10,8 @@ import (
 	"github.com/spf13/viper"
 )
 
-const version = "0.1.0"
+// version is set at build time via ldflags: -X cmfy/internal/cmd.version=vX.Y.Z
+var version = "0.1.0"
 
 var cfgFile string
 

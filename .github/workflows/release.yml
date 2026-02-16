@@ -156,19 +156,38 @@ jobs:
           ref: ${{ env.RELEASE_TAG }}
 
       - name: Generate PKGBUILD for cmfy-bin
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           VERSION="${{ env.RELEASE_TAG }}"
           VERSION="${VERSION#v}"
 
-          # Download checksums
-          curl -sL "https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}/checksums.txt" -o checksums.txt
+          # Download checksums from release assets (retry up to 5 times)
+          for i in 1 2 3 4 5; do
+            if gh release download "${{ env.RELEASE_TAG }}" --repo "${{ github.repository }}" --pattern "checksums.txt" --output checksums.txt; then
+              break
+            fi
+            echo "Attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
 
-          SHA256=$(grep "x86_64-unknown-linux-gnu.tar.gz" checksums.txt | cut -d' ' -f1)
+          echo "=== checksums.txt ==="
+          cat checksums.txt
+          echo "=== end ==="
 
-          cat > PKGBUILD << EOF
+          SHA256=$(grep "x86_64-unknown-linux-gnu.tar.gz" checksums.txt | awk '{print $1}')
+          echo "SHA256=${SHA256}"
+
+          if [ -z "$SHA256" ]; then
+            echo "ERROR: Could not extract SHA256 for x86_64-unknown-linux-gnu.tar.gz"
+            exit 1
+          fi
+
+          cat > PKGBUILD <<'PKGEOF'
           # Maintainer: Tommy Falkowski <tommy@byteowlz.com>
           pkgname=cmfy-bin
-          pkgver=${VERSION}
+          pkgver=VERSION_PLACEHOLDER
           pkgrel=1
           pkgdesc="A flexible ComfyUI CLI"
           arch=('x86_64')
@@ -176,13 +195,22 @@ jobs:
           license=('MIT')
           provides=('cmfy')
           conflicts=('cmfy')
-          source=("cmfy-\${pkgver}.tar.gz::https://github.com/byteowlz/cmfy/releases/download/v\${pkgver}/cmfy-v\${pkgver}-x86_64-unknown-linux-gnu.tar.gz")
-          sha256sums=('${SHA256}')
+          source=("cmfy-${pkgver}.tar.gz::https://github.com/byteowlz/cmfy/releases/download/v${pkgver}/cmfy-v${pkgver}-x86_64-unknown-linux-gnu.tar.gz")
+          sha256sums=('SHA256_PLACEHOLDER')
 
           package() {
-              install -Dm755 cmfy "\$pkgdir/usr/bin/cmfy"
+              install -Dm755 cmfy "$pkgdir/usr/bin/cmfy"
           }
-          EOF
+          PKGEOF
+
+          # Replace placeholders and strip leading whitespace
+          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" PKGBUILD
+          sed -i "s/SHA256_PLACEHOLDER/${SHA256}/g" PKGBUILD
+          sed -i 's/^          //' PKGBUILD
+
+          echo "=== Generated PKGBUILD ==="
+          cat PKGBUILD
+          echo "=== end ==="
 
       - name: Publish cmfy-bin to AUR
         uses: KSXGitHub/github-actions-deploy-aur@v3.0.1
@@ -205,13 +233,14 @@ jobs:
 
       - name: Generate PKGBUILD for cmfy
         run: |
+          set -euo pipefail
           VERSION="${{ env.RELEASE_TAG }}"
           VERSION="${VERSION#v}"
 
-          cat > PKGBUILD << EOF
+          cat > PKGBUILD <<'PKGEOF'
           # Maintainer: Tommy Falkowski <tommy@byteowlz.com>
           pkgname=cmfy
-          pkgver=${VERSION}
+          pkgver=VERSION_PLACEHOLDER
           pkgrel=1
           pkgdesc="A flexible ComfyUI CLI"
           arch=('x86_64' 'aarch64')
@@ -220,21 +249,29 @@ jobs:
           provides=('cmfy')
           conflicts=('cmfy-bin')
           makedepends=('go>=1.21')
-          source=("\${pkgname}-\${pkgver}.tar.gz::https://github.com/byteowlz/cmfy/archive/v\${pkgver}.tar.gz")
+          source=("${pkgname}-${pkgver}.tar.gz::https://github.com/byteowlz/cmfy/archive/v${pkgver}.tar.gz")
           sha256sums=('SKIP')
 
           build() {
-              cd "\${pkgname}-\${pkgver}"
+              cd "${pkgname}-${pkgver}"
               export CGO_ENABLED=0
-              go build -ldflags="-s -w -X cmfy/internal/cmd.version=v\${pkgver}" -o cmfy ./cmd/cmfy
+              go build -ldflags="-s -w -X cmfy/internal/cmd.version=v${pkgver}" -o cmfy ./cmd/cmfy
           }
 
           package() {
-              cd "\${pkgname}-\${pkgver}"
-              install -Dm755 cmfy "\${pkgdir}/usr/bin/cmfy"
-              install -Dm644 LICENSE "\${pkgdir}/usr/share/licenses/\${pkgname}/LICENSE"
+              cd "${pkgname}-${pkgver}"
+              install -Dm755 cmfy "${pkgdir}/usr/bin/cmfy"
+              install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
           }
-          EOF
+          PKGEOF
+
+          # Replace placeholders and strip leading whitespace
+          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" PKGBUILD
+          sed -i 's/^          //' PKGBUILD
+
+          echo "=== Generated PKGBUILD ==="
+          cat PKGBUILD
+          echo "=== end ==="
 
       - name: Publish cmfy to AUR
         uses: KSXGitHub/github-actions-deploy-aur@v3.0.1

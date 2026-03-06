@@ -9,6 +9,15 @@ import (
 	"github.com/spf13/viper"
 )
 
+type RemoteServer struct {
+	Host          string
+	User          string
+	Port          int
+	KeyPath       string
+	WorkflowsDir  string
+	SSHConfigHost string
+}
+
 type Config struct {
 	ServerURL              string
 	OutputDir              string
@@ -22,6 +31,7 @@ type Config struct {
 	WorkflowVars           map[string]map[string]string
 	StandardWorkflows      map[string]string
 	StandardWorkflowParams map[string]map[string]string
+	RemoteServers          map[string]RemoteServer
 }
 
 func defaultConfig() *Config {
@@ -38,6 +48,7 @@ func defaultConfig() *Config {
 		WorkflowVars:           map[string]map[string]string{},
 		StandardWorkflows:      map[string]string{},
 		StandardWorkflowParams: map[string]map[string]string{},
+		RemoteServers:          map[string]RemoteServer{},
 	}
 }
 
@@ -181,11 +192,28 @@ func Load() (*Config, error) {
 		}
 	}
 
+	if v.IsSet("remote_servers") {
+		rs := v.GetStringMap("remote_servers")
+		cfg.RemoteServers = make(map[string]RemoteServer, len(rs))
+		for name := range rs {
+			base := fmt.Sprintf("remote_servers.%s", name)
+			cfg.RemoteServers[name] = RemoteServer{
+				Host:          strings.TrimSpace(v.GetString(base + ".host")),
+				User:          strings.TrimSpace(v.GetString(base + ".user")),
+				Port:          v.GetInt(base + ".port"),
+				KeyPath:       expandPath(strings.TrimSpace(v.GetString(base + ".key_path"))),
+				WorkflowsDir:  expandPath(strings.TrimSpace(v.GetString(base + ".workflows_dir"))),
+				SSHConfigHost: strings.TrimSpace(v.GetString(base + ".ssh_config_host")),
+			}
+		}
+	}
+
 	return cfg, nil
 }
 
 func (c *Config) ToTOML() string {
 	var b strings.Builder
+	fmt.Fprintf(&b, "\"$schema\" = \"https://raw.githubusercontent.com/byteowlz/schemas/refs/heads/main/cmfy/cmfy.config.schema.json\"\n\n")
 	fmt.Fprintf(&b, "server_url = \"%s\"\n", c.ServerURL)
 	fmt.Fprintf(&b, "output_dir = \"%s\"\n", c.OutputDir)
 	fmt.Fprintf(&b, "workflows_dir = \"%s\"\n", c.WorkflowsDir)
@@ -237,6 +265,29 @@ func (c *Config) ToTOML() string {
 			fmt.Fprintf(&b, "\n[standard_workflows_params.%s]\n", alias)
 			for k, v := range m {
 				fmt.Fprintf(&b, "%s = \"%s\"\n", k, escapeString(v))
+			}
+		}
+	}
+	if len(c.RemoteServers) > 0 {
+		for name, srv := range c.RemoteServers {
+			fmt.Fprintf(&b, "\n[remote_servers.%s]\n", name)
+			if srv.SSHConfigHost != "" {
+				fmt.Fprintf(&b, "ssh_config_host = \"%s\"\n", escapeString(srv.SSHConfigHost))
+			}
+			if srv.Host != "" {
+				fmt.Fprintf(&b, "host = \"%s\"\n", escapeString(srv.Host))
+			}
+			if srv.User != "" {
+				fmt.Fprintf(&b, "user = \"%s\"\n", escapeString(srv.User))
+			}
+			if srv.Port > 0 {
+				fmt.Fprintf(&b, "port = %d\n", srv.Port)
+			}
+			if srv.KeyPath != "" {
+				fmt.Fprintf(&b, "key_path = \"%s\"\n", escapeString(srv.KeyPath))
+			}
+			if srv.WorkflowsDir != "" {
+				fmt.Fprintf(&b, "workflows_dir = \"%s\"\n", escapeString(srv.WorkflowsDir))
 			}
 		}
 	}

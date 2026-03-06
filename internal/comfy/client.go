@@ -147,6 +147,45 @@ func (c *Client) History(promptID string) (map[string]interface{}, error) {
 	return res, nil
 }
 
+// Queue returns current running/pending queue state.
+func (c *Client) Queue() (map[string]interface{}, error) {
+	u := c.BaseURL + "/queue"
+	req, _ := http.NewRequest(http.MethodGet, u, nil)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("queue failed: %s", string(b))
+	}
+	var res map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// DeleteFromQueue attempts to remove prompt IDs from queue.
+func (c *Client) DeleteFromQueue(promptIDs []string) error {
+	body := map[string]interface{}{"delete": promptIDs}
+	b, _ := json.Marshal(body)
+	u := c.BaseURL + "/queue"
+	req, _ := http.NewRequest(http.MethodPost, u, bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		rb, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("queue delete failed: %s", string(rb))
+	}
+	return nil
+}
+
 // View fetches an output asset by filename/subfolder/type.
 func (c *Client) View(filename, subfolder, typ string) ([]byte, error) {
 	q := url.Values{}

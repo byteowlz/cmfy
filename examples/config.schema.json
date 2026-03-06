@@ -1,0 +1,121 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/byteowlz/cmfy/schemas/config.schema.json",
+  "title": "cmfy configuration",
+  "description": "Configuration schema for cmfy",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema reference for editor support"
+    },
+    "server_url": {
+      "type": "string"
+    },
+    "output_dir": {
+      "type": "string"
+    },
+    "workflows_dir": {
+      "type": "string"
+    },
+    "default_workflow": {
+      "type": "string"
+    },
+    "default_output_name": {
+      "type": "string"
+    },
+    "default_width": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "default_height": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "default_steps": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "vars": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "workflows": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "vars": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "standard_workflows": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "standard_workflows_params": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
+      }
+    },
+    "remote_servers": {
+      "type": "object",
+      "description": "Named SSH targets for remote workflow discovery and import",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "ssh_config_host": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "user": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "key_path": {
+            "type": "string"
+          },
+          "workflows_dir": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "anyOf": [
+          {
+            "required": [
+              "ssh_config_host",
+              "workflows_dir"
+            ]
+          },
+          {
+            "required": [
+              "host",
+              "workflows_dir"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "additionalProperties": false
+}

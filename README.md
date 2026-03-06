@@ -5,9 +5,9 @@ cmfy is a fast, flexible command‑line tool to run ComfyUI workflows. It loads 
 
 ## Features
 
-- Simple commands: `run`, `workflows` (list/show/inspect/assign), `server ping`, `config` (init/path), `version`.
+- Simple commands: `run`, `workflows` (list/show/inspect/assign/ssh-list/ssh-import), `queue`, `job` (status/wait/cancel), `server ping`, `config` (init/path), `version`.
 - Works with local workflow JSONs; supports both raw prompt maps and `{ "prompt": { ... } }` wrappers.
-- Configurable `workflows_dir` and `output_dir` in a TOML config stored under `$XDG_DATA_HOME/cmfy/config.toml`.
+- Configurable `workflows_dir` and `output_dir` in a TOML config stored under `$XDG_CONFIG_HOME/cmfy/config.toml`.
 - Rich templating via `${KEY}` placeholders across string inputs.
 - Precise overrides with `--set <nodeID>.inputs.<name>=<value>` (coerces ints/floats/bools; quoted strings preserved).
 - Asset uploads for images/masks/inputs; exposes `${IMAGE}`, `${MASK}`, `${INPUT}` and enumerated variants.
@@ -29,10 +29,19 @@ go build -o cmfy ./cmd/cmfy
 ./cmfy version
 ```
 
+Or use `just`:
+
+```bash
+just help
+just build
+just test
+just check
+```
+
 
 ## Configuration
 
-Config is stored at `$XDG_DATA_HOME/cmfy/config.toml`. If `XDG_DATA_HOME` is empty, falls back to `~/.local/share/cmfy/config.toml`.
+Config is stored at `$XDG_CONFIG_HOME/cmfy/config.toml`. If `XDG_CONFIG_HOME` is empty, falls back to `~/.config/cmfy/config.toml`.
 
 Initialize a default config:
 
@@ -44,6 +53,8 @@ Initialize a default config:
 Config keys:
 
 ```toml
+"$schema" = "https://raw.githubusercontent.com/byteowlz/schemas/refs/heads/main/cmfy/cmfy.config.schema.json"
+
 server_url = "http://127.0.0.1:8188"
 output_dir = "outputs"
 workflows_dir = "workflows"
@@ -83,9 +94,18 @@ img2img_inpainting = ""
 # denoise      = "12.inputs.denoise"
 
 [standard_workflows_params.txt2img_lora]
-# sampler_name       = "28.inputs.sampler_name"
+# sampler_name         = "28.inputs.sampler_name"
 # refiner.sampler_name = "42.inputs.sampler_name"
 # refiner.steps        = "42.inputs.steps"
+
+# Optional: named remote servers for SSH workflow discovery/import
+[remote_servers.local_gpu]
+ssh_config_host = "local-gpu"
+workflows_dir = "~/ComfyUI/user/default/workflows"
+# host = "192.168.1.20"
+# user = "agent"
+# port = 22
+# key_path = "~/.ssh/id_ed25519"
 ```
 
 
@@ -100,8 +120,13 @@ Inspect a workflow to discover node IDs, class types, and inputs:
 
 ```bash
 ./cmfy workflows inspect txt2img
-./cmfy workflows show txt2img     # prints JSON with prompt map
-./cmfy workflows list             # lists available names in workflows_dir
+./cmfy workflows show txt2img      # prints JSON with prompt map
+./cmfy workflows list              # lists available names in workflows_dir
+
+# From SSH-configured remote servers in config.toml
+./cmfy workflows ssh-list local_gpu
+./cmfy workflows ssh-list local_gpu flux --json
+./cmfy workflows ssh-import local_gpu Flux_upscale.json
 ```
 
 
@@ -115,6 +140,9 @@ Basic run:
 
 # By path (absolute or relative)
 ./cmfy run -w ./workflows/my_flow.json --prompt "a sketch of an owl"
+
+# Async submit (returns immediately; prints prompt ID)
+./cmfy run -w txt2img --prompt "a sketch of an owl" --async
 ```
 
 Using standard aliases:
@@ -191,6 +219,11 @@ Outputs:
 
 ```bash
 ./cmfy server ping      # checks connectivity to server_url
+./cmfy queue            # show running/pending queue
+./cmfy queue --json     # machine-readable queue status
+./cmfy job status <id>  # check a prompt by ID
+./cmfy job wait <id>    # wait for completion
+./cmfy job cancel <id>  # try to remove from queue
 ./cmfy version          # prints CLI version
 ```
 
@@ -200,6 +233,8 @@ Outputs:
 - `POST /upload` — uploads files (form-data) as type `input`.
 - `POST /prompt` — submits a prompt graph, returns `prompt_id`.
 - `GET  /history/<prompt_id>` — tracks prompt execution and outputs.
+- `GET  /queue` — queue state for running/pending prompts.
+- `POST /queue` — queue manipulation (used for cancel attempts).
 - `GET  /view?filename=...&subfolder=...&type=...` — downloads generated assets.
 - `GET  /system_stats` — used for `server ping`.
 

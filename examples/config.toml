@@ -1,3 +1,5 @@
+"$schema" = "https://raw.githubusercontent.com/byteowlz/schemas/refs/heads/main/cmfy/cmfy.config.schema.json"
+
 server_url = "http://127.0.0.1:8188"
 output_dir = "outputs"
 workflows_dir = "workflows"
@@ -16,3 +18,13 @@ txt2vid = ""
 txt2img_lora = ""
 img2img_inpainting = ""
 rmb = ""
+
+# Optional: discover/import workflows from remote ComfyUI hosts via SSH
+# Use either ssh_config_host (preferred, from ~/.ssh/config) OR host/user/port.
+[remote_servers.local_gpu]
+ssh_config_host = "local-gpu"
+workflows_dir = "~/ComfyUI/user/default/workflows"
+# host = "192.168.1.20"
+# user = "agent"
+# port = 22
+# key_path = "~/.ssh/id_ed25519"

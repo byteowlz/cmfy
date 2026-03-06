@@ -41,6 +41,8 @@ var (
 	images       []string
 	masks        []string
 	inputs       []string
+	runAsync     bool
+	runTimeout   time.Duration
 )
 
 var runCmd = &cobra.Command{
@@ -77,6 +79,8 @@ func init() {
 	runCmd.Flags().StringArrayVar(&images, "image", []string{}, "Upload image file and expose ${IMAGEn} (repeatable)")
 	runCmd.Flags().StringArrayVar(&masks, "mask", []string{}, "Upload mask file and expose ${MASKn} (repeatable)")
 	runCmd.Flags().StringArrayVar(&inputs, "input", []string{}, "Upload generic input file and expose ${INPUTn} (repeatable)")
+	runCmd.Flags().BoolVar(&runAsync, "async", false, "Submit and return immediately without waiting")
+	runCmd.Flags().DurationVar(&runTimeout, "timeout", 30*time.Minute, "Maximum wait time when not async")
 }
 
 func runWorkflow(cmd *cobra.Command, args []string) error {
@@ -265,7 +269,12 @@ func runWorkflow(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("Prompt ID: %s\n", promptID)
 
-	deadline := time.Now().Add(30 * time.Minute)
+	if runAsync {
+		fmt.Println("Submitted asynchronously. Use 'cmfy job status", promptID+"' to check progress.")
+		return nil
+	}
+
+	deadline := time.Now().Add(runTimeout)
 	lastState := ""
 	fmt.Println("Waiting for completion...")
 	for {
@@ -282,25 +291,8 @@ func runWorkflow(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		state := ""
-
-		if statusVal, ok := entry["status"]; ok {
-			switch v := statusVal.(type) {
-			case string:
-				state = v
-			case map[string]any:
-				if completed, ok := v["completed"].(bool); ok && completed {
-					state = "completed"
-				} else if statusStr, ok := v["status_str"].(string); ok {
-					state = statusStr
-				}
-			}
-		}
-
+		state := parseHistoryState(entry)
 		outputs := getMap(entry, "outputs")
-		if len(outputs) > 0 && state == "" {
-			state = "completed"
-		}
 
 		if state != "" && state != lastState {
 			fmt.Println("status:", state)

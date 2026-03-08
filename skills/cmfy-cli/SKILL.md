@@ -87,6 +87,49 @@ cmfy job wait <prompt_id> --timeout 30m
 cmfy job cancel <prompt_id>
 ```
 
+## Converting API JSON to cmfy-compatible workflow JSON
+
+cmfy accepts either of these workflow file shapes:
+
+1. Prompt map only:
+
+```json
+{
+  "3": { "class_type": "KSampler", "inputs": { "steps": 28 } }
+}
+```
+
+2. Wrapper with prompt key:
+
+```json
+{
+  "prompt": {
+    "3": { "class_type": "KSampler", "inputs": { "steps": 28 } }
+  }
+}
+```
+
+If you captured a `/prompt` request payload (includes `client_id` and `prompt`), extract `prompt` into a workflow file:
+
+```bash
+jq '{prompt: .prompt}' api-payload.json > workflows/from_api.json
+cmfy workflows inspect workflows/from_api.json
+```
+
+If your JSON is already a bare prompt map, save as-is under `workflows/*.json`.
+
+Quick normalization helper:
+
+```bash
+jq 'if has("prompt") then {prompt: .prompt} else {prompt: .} end' input.json > workflows/normalized.json
+```
+
+Then run:
+
+```bash
+cmfy run -w workflows/normalized.json
+```
+
 ## Config Notes
 
 Config file path:

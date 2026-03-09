@@ -37,7 +37,7 @@ type Config struct {
 func defaultConfig() *Config {
 	return &Config{
 		ServerURL:              "http://127.0.0.1:8188",
-		OutputDir:              "outputs",
+		OutputDir:              "./outputs",
 		WorkflowsDir:           "workflows",
 		DefaultWorkflow:        "",
 		DefaultOutputName:      "ComfyUI",

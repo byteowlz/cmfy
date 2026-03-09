@@ -43,6 +43,8 @@ just check
 
 Config is stored at `$XDG_CONFIG_HOME/cmfy/config.toml`. If `XDG_CONFIG_HOME` is empty, falls back to `~/.config/cmfy/config.toml`.
 
+By default, `output_dir` is `./outputs` (relative to the current working directory where you run `cmfy`).
+
 Initialize a default config:
 
 ```bash
@@ -56,7 +58,7 @@ Config keys:
 "$schema" = "https://raw.githubusercontent.com/byteowlz/schemas/refs/heads/main/cmfy/cmfy.config.schema.json"
 
 server_url = "http://127.0.0.1:8188"
-output_dir = "outputs"
+output_dir = "./outputs"
 workflows_dir = "workflows"
 default_workflow = ""       # optional fallback when -w is omitted
 default_width = 768

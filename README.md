@@ -5,7 +5,7 @@ cmfy is a fast, flexible command‑line tool to run ComfyUI workflows. It loads 
 
 ## Features
 
-- Simple commands: `run`, `workflows` (list/show/inspect/assign/ssh-list/ssh-import), `queue`, `job` (status/wait/cancel), `server ping`, `config` (init/path), `version`.
+- Simple commands: `run`, `batch run` (JSONL mixed workflows), `workflows` (list/show/inspect/assign/ssh-list/ssh-import), `queue`, `job` (status/wait/cancel), `server ping`, `config` (init/path), `version`.
 - Works with local workflow JSONs; supports both raw prompt maps and `{ "prompt": { ... } }` wrappers.
 - Configurable `workflows_dir` and `output_dir` in a TOML config stored under `$XDG_CONFIG_HOME/cmfy/config.toml`.
 - Rich templating via `${KEY}` placeholders across string inputs.
@@ -147,14 +147,23 @@ Basic run:
 ./cmfy run -w txt2img --prompt "a sketch of an owl" --async
 ```
 
-Using standard aliases:
+Using standard and custom aliases:
 
 ```bash
-# Assign or rely on implicit matching file (e.g., workflows/txt2img.json)
+# Assign (CLI writes config.toml [standard_workflows])
 ./cmfy workflows assign txt2img my_txt2img
+./cmfy workflows assign ltx23 ~/cmfy/workflows/image_to_video_ltx2_3_i2v_with_sound.json
 
 # Then run directly by alias
 ./cmfy txt2img --prompt "sunlit woodland" --steps 28 --cfg 5.5 --sampler euler
+./cmfy ltx23 --image input.png --var PROMPT="cinematic close-up" --async
+```
+
+You can also define aliases manually in config:
+
+```toml
+[standard_workflows]
+ltx23 = "~/cmfy/workflows/image_to_video_ltx2_3_i2v_with_sound.json"
 ```
 
 Asset uploads:
@@ -216,6 +225,35 @@ Outputs:
   5) Uploaded assets populate `${IMAGE}`, `${MASK}`, `${INPUT}` and enumerated variants
 - Numeric inputs generally require `--set` unless you model them as strings in the workflow and template them.
 
+
+## Batch Mode (JSONL)
+
+Submit multiple jobs from a JSONL file. Each line can target a different workflow.
+
+```bash
+# Print example JSONL to stdout
+./cmfy batch run example --mode mixed-workflows
+
+# Run batch file
+./cmfy batch run --file jobs.jsonl --async
+
+# Throttle submission rate (submission delay only, not Comfy execution concurrency)
+./cmfy batch run --file jobs.jsonl --submit-delay 500ms
+
+# Machine-readable result summary
+./cmfy batch run --file jobs.jsonl --json
+```
+
+JSONL line schema (core fields):
+
+- `workflow` (required): alias, name, or workflow path
+- `id` (optional): user tracking ID
+- `vars` (optional): map for `${KEY}` substitutions
+- `set` (optional): map for `<nodeID>.inputs.<name>=value`
+- `image` / `mask` / `input` (optional): arrays of file paths
+- `server` (optional): override server URL
+- `async` (optional): per-line async override
+- `timeout` (optional): per-line wait timeout (e.g. `30m`)
 
 ## Server Utilities
 

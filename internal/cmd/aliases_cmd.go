@@ -3,6 +3,10 @@ package cmd
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
+	"time"
+
+	"cmfy/internal/config"
 
 	"github.com/spf13/cobra"
 )
@@ -10,9 +14,38 @@ import (
 var aliases = []string{"txt2img", "img2img", "canny2img", "depth2img", "img2vid", "txt2vid", "txt2img_lora", "img2img_inpainting", "rmb"}
 
 func init() {
+	registered := map[string]bool{}
+
 	for _, alias := range aliases {
+		alias = strings.TrimSpace(alias)
+		if alias == "" || registered[alias] || commandExists(alias) {
+			continue
+		}
 		createAliasCommand(alias)
+		registered[alias] = true
 	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return
+	}
+	for alias := range cfg.StandardWorkflows {
+		alias = strings.TrimSpace(alias)
+		if alias == "" || strings.Contains(alias, " ") || registered[alias] || commandExists(alias) {
+			continue
+		}
+		createAliasCommand(alias)
+		registered[alias] = true
+	}
+}
+
+func commandExists(name string) bool {
+	for _, c := range rootCmd.Commands() {
+		if c.Name() == name {
+			return true
+		}
+	}
+	return false
 }
 
 func createAliasCommand(alias string) {
@@ -52,6 +85,8 @@ func createAliasCommand(alias string) {
 	cmd.Flags().StringArrayVar(&images, "image", []string{}, "Upload image file and expose ${IMAGEn} (repeatable)")
 	cmd.Flags().StringArrayVar(&masks, "mask", []string{}, "Upload mask file and expose ${MASKn} (repeatable)")
 	cmd.Flags().StringArrayVar(&inputs, "input", []string{}, "Upload generic input file and expose ${INPUTn} (repeatable)")
+	cmd.Flags().BoolVar(&runAsync, "async", false, "Submit and return immediately without waiting")
+	cmd.Flags().DurationVar(&runTimeout, "timeout", 30*time.Minute, "Maximum wait time when not async")
 
 	rootCmd.AddCommand(cmd)
 }

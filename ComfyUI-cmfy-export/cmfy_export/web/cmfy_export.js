@@ -295,27 +295,43 @@ async function showExportDialog() {
                 nodeId:  selectedNodeId || w.nodeId,
                 varName: name.value.trim().toUpperCase().replace(/[^A-Z0-9_]/g, "_") || varName,
                 enabled: cb.checked,
+                originalValue: w.value,
+                classType: w.classType,
             };
         });
 
         const cmfyWf  = applyWildcards(workflow, finalEntries);
+
+        // Build variables block with defaults from current workflow values
+        const variables = {};
+        for (const e of finalEntries) {
+            if (!e.enabled) continue;
+            variables[e.varName] = {
+                "default": String(e.originalValue),
+                "description": e.field + " on " + (e.classType || "unknown"),
+            };
+        }
+
         let filename = overlay.querySelector(".cmfy-fname").value.trim() || "workflow.json";
         if (!filename.endsWith(".json")) filename += ".json";
+
+        // Merge variables block into the exported workflow
+        const exportData = { ...cmfyWf, variables };
 
         try {
             const resp = await api.fetchApi("/cmfy/export", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ workflow: cmfyWf, filename })
+                body: JSON.stringify({ workflow: cmfyWf, variables, filename })
             });
             if (resp.ok) {
                 const r = await resp.json();
                 alert("Saved to: " + r.path);
             } else {
-                downloadJson(cmfyWf, filename);
+                downloadJson(exportData, filename);
             }
         } catch {
-            downloadJson(cmfyWf, filename);
+            downloadJson(exportData, filename);
         }
         close();
     });

@@ -120,10 +120,13 @@ func runWorkflow(cmd *cobra.Command, args []string) error {
 		aliasUsed = workflowName
 		workflowName = wf
 	}
-	prompt, wfPath, err := workflow.Load(cfg.WorkflowsDir, workflowName)
+	prompt, wfPath, varDefaults, err := workflow.LoadWithVars(cfg.WorkflowsDir, workflowName)
 	if err != nil {
 		return err
 	}
+	// Remove the variables block so ComfyUI doesn't treat it as a node
+	delete(prompt, "#variables")
+	delete(prompt, "variables")
 
 	vars := map[string]string{}
 	for k, v := range cfg.Vars {
@@ -221,7 +224,7 @@ func runWorkflow(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	workflow.ApplyVars(prompt, vars)
+	workflow.ApplyVarsWithDefaults(prompt, vars, varDefaults)
 	if err := workflow.ApplySets(prompt, setList); err != nil {
 		return err
 	}
@@ -310,40 +313,46 @@ func runWorkflow(cmd *cobra.Command, args []string) error {
 				break
 			}
 			saved := 0
+			// ComfyUI returns outputs under various keys depending on node type:
+			// "images" (SaveImage), "gifs"/"animated" (AnimateDiff/SaveAnimatedWEBP),
+			// "videos" (SaveVideo). Check all keys that contain file-reference arrays.
+			outputKeys := []string{"images", "gifs", "animated", "videos"}
 			for nodeID, out := range outputs {
 				om, ok := out.(map[string]any)
 				if !ok {
 					continue
 				}
-				images, _ := om["images"].([]any)
-				for _, iv := range images {
-					im, _ := iv.(map[string]any)
-					filename := getString(im, "filename")
-					subfolder := getString(im, "subfolder")
-					typ := getString(im, "type")
+				for _, key := range outputKeys {
+					items, _ := om[key].([]any)
+					for _, iv := range items {
+						im, _ := iv.(map[string]any)
+						filename := getString(im, "filename")
+						subfolder := getString(im, "subfolder")
+						typ := getString(im, "type")
 
-					if filename == "" {
-						fmt.Printf("Warning: empty filename in node %s output\n", nodeID)
-						continue
-					}
+						if filename == "" {
+							fmt.Printf("Warning: empty filename in node %s output\n", nodeID)
+							continue
+						}
 
-					data, err := client.View(filename, subfolder, typ)
-					if err != nil {
-						fmt.Printf("Warning: failed to fetch %s: %v\n", filename, err)
-						continue
+						data, err := client.View(filename, subfolder, typ)
+						if err != nil {
+							fmt.Printf("Warning: failed to fetch %s: %v\n", filename, err)
+							continue
+						}
+						outPath := filepath.Join(cfg.OutputDir, filename)
+						if err := os.WriteFile(outPath, data, 0o644); err != nil {
+							return fmt.Errorf("failed to save %s: %w", outPath, err)
+						}
+						fmt.Println("Saved:", outPath)
+						saved++
 					}
-					outPath := filepath.Join(cfg.OutputDir, filename)
-					if err := os.WriteFile(outPath, data, 0o644); err != nil {
-						return fmt.Errorf("failed to save %s: %w", outPath, err)
-					}
-					fmt.Println("Saved:", outPath)
-					saved++
 				}
 			}
 			if saved == 0 {
-				fmt.Println("Workflow completed (no images saved)")
+				fmt.Println("Workflow completed (no outputs saved)")
 			} else {
-				fmt.Printf("Workflow completed (%d image(s) saved)\n", saved)
+				fmt.Printf("Workflow completed (%d file(s) saved)\n", saved)
 			}
 			break
 		}

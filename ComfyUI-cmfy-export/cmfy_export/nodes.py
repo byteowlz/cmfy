@@ -116,12 +116,33 @@ def detect_wildcard_fields(
     return wildcards
 
 
+def build_variables_block(
+    wildcards: Dict[str, Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Build a 'variables' block from detected wildcards with default values
+    taken from the current workflow values.
+    """
+    variables = {}
+    for key, info in wildcards.items():
+        # Strip ${...} wrapper if present
+        var_name = key.strip("${}")
+        if not info.get("enabled", False):
+            continue
+        variables[var_name] = {
+            "default": str(info["value"]),
+            "description": f"{info.get('field', '')} on {info.get('class_type', 'unknown')}",
+        }
+    return variables
+
+
 def convert_to_cmfy_format(
     workflow: Dict[str, Any],
     wildcards: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Convert a ComfyUI workflow to cmfy format with wildcards.
+    Includes a 'variables' block with defaults from current workflow values.
     """
     cmfy_workflow = {}
 
@@ -190,6 +211,12 @@ class CmifyExport:
             workflow = json.loads(workflow_json)
             wildcards = detect_wildcard_fields(workflow) if auto_detect_wildcards else None
             cmfy_workflow = convert_to_cmfy_format(workflow, wildcards)
+
+            # Build variables block with defaults from current values
+            if wildcards:
+                variables = build_variables_block(wildcards)
+                if variables:
+                    cmfy_workflow["variables"] = variables
 
             output_dir = os.path.expanduser("~/cmfy/workflows")
             os.makedirs(output_dir, exist_ok=True)

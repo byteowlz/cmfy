@@ -10,10 +10,12 @@ from aiohttp import web
 async def handle_export(request):
     """
     Handle workflow export to cmfy format.
+    Includes a 'variables' block with defaults when provided.
     """
     try:
         data = await request.json()
         workflow = data.get("workflow", {})
+        variables = data.get("variables", {})
         filename = data.get("filename", "exported_workflow.json")
 
         if not filename.endswith(".json"):
@@ -22,9 +24,14 @@ async def handle_export(request):
         output_dir = os.path.expanduser("~/cmfy/workflows")
         os.makedirs(output_dir, exist_ok=True)
 
+        # Build output with variables block at the top level
+        output = dict(workflow)
+        if variables:
+            output["variables"] = variables
+
         output_path = os.path.join(output_dir, filename)
         with open(output_path, "w") as f:
-            json.dump(workflow, f, indent=2)
+            json.dump(output, f, indent=2)
 
         return web.json_response({
             "success": True,

@@ -166,6 +166,12 @@ func runWorkflow(cmd *cobra.Command, args []string) error {
 	if cfgScale != 0 {
 		vars["CFG"] = trimFloat(cfgScale)
 	}
+	if _, ok := vars["FRAME_RATE"]; !ok {
+		vars["FRAME_RATE"] = "25"
+	}
+	if _, ok := vars["LENGTH"]; !ok {
+		vars["LENGTH"] = "121"
+	}
 	for _, kv := range varList {
 		k, v, ok := splitKV(kv)
 		if !ok {

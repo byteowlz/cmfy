@@ -41,8 +41,8 @@ var (
 	images       []string
 	masks        []string
 	inputs       []string
-	runAsync     bool
-	runTimeout   time.Duration
+	runAsync   bool
+	runTimeout time.Duration
 )
 
 var runCmd = &cobra.Command{
@@ -79,7 +79,7 @@ func init() {
 	runCmd.Flags().StringArrayVar(&images, "image", []string{}, "Upload image file and expose ${IMAGEn} (repeatable)")
 	runCmd.Flags().StringArrayVar(&masks, "mask", []string{}, "Upload mask file and expose ${MASKn} (repeatable)")
 	runCmd.Flags().StringArrayVar(&inputs, "input", []string{}, "Upload generic input file and expose ${INPUTn} (repeatable)")
-	runCmd.Flags().BoolVar(&runAsync, "async", false, "Submit and return immediately without waiting")
+	runCmd.Flags().BoolVar(&runAsync, "async", false, "Submit and return prompt ID without waiting")
 	runCmd.Flags().DurationVar(&runTimeout, "timeout", 30*time.Minute, "Maximum wait time when not async")
 }
 
@@ -125,7 +125,6 @@ func runWorkflow(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	// Remove the variables block so ComfyUI doesn't treat it as a node
-	delete(prompt, "#variables")
 	delete(prompt, "variables")
 
 	vars := map[string]string{}
@@ -279,11 +278,16 @@ func runWorkflow(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Prompt ID: %s\n", promptID)
 
 	if runAsync {
-		fmt.Println("Submitted asynchronously. Use 'cmfy job status", promptID+"' to check progress.")
+		fmt.Println("Submitted asynchronously. Use 'cmfy job wait --download", promptID+"' to collect outputs.")
 		return nil
 	}
 
-	deadline := time.Now().Add(runTimeout)
+	return waitAndDownload(client, cfg, promptID, runTimeout)
+}
+
+// waitAndDownload polls History until the prompt completes, then downloads outputs.
+func waitAndDownload(client *comfy.Client, cfg *config.Config, promptID string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
 	lastState := ""
 	fmt.Println("Waiting for completion...")
 	for {
@@ -301,63 +305,23 @@ func runWorkflow(cmd *cobra.Command, args []string) error {
 		}
 
 		state := parseHistoryState(entry)
-		outputs := getMap(entry, "outputs")
-
 		if state != "" && state != lastState {
 			fmt.Println("status:", state)
 			lastState = state
 		}
 		if state == "completed" || state == "success" {
+			outputs := getMap(entry, "outputs")
 			if len(outputs) == 0 {
 				fmt.Println("Workflow completed (no outputs to save)")
-				break
-			}
-			saved := 0
-			// ComfyUI returns outputs under various keys depending on node type:
-			// "images" (SaveImage), "gifs"/"animated" (AnimateDiff/SaveAnimatedWEBP),
-			// "videos" (SaveVideo). Check all keys that contain file-reference arrays.
-			outputKeys := []string{"images", "gifs", "animated", "videos"}
-			for nodeID, out := range outputs {
-				om, ok := out.(map[string]any)
-				if !ok {
-					continue
-				}
-				for _, key := range outputKeys {
-					items, _ := om[key].([]any)
-					for _, iv := range items {
-						im, _ := iv.(map[string]any)
-						filename := getString(im, "filename")
-						subfolder := getString(im, "subfolder")
-						typ := getString(im, "type")
-
-						if filename == "" {
-							fmt.Printf("Warning: empty filename in node %s output\n", nodeID)
-							continue
-						}
-
-						data, err := client.View(filename, subfolder, typ)
-						if err != nil {
-							fmt.Printf("Warning: failed to fetch %s: %v\n", filename, err)
-							continue
-						}
-						outPath := filepath.Join(cfg.OutputDir, filename)
-						if err := os.WriteFile(outPath, data, 0o644); err != nil {
-							return fmt.Errorf("failed to save %s: %w", outPath, err)
-						}
-						fmt.Println("Saved:", outPath)
-						saved++
-					}
-				}
-			}
-			if saved == 0 {
-				fmt.Println("Workflow completed (no outputs saved)")
-			} else {
-				fmt.Printf("Workflow completed (%d file(s) saved)\n", saved)
+			} else if err := downloadOutputsFromMap(client, outputs, cfg); err != nil {
+				return err
 			}
 			break
 		}
+		if state == "failed" || state == "error" {
+			return fmt.Errorf("prompt %s failed", promptID)
+		}
 		time.Sleep(1500 * time.Millisecond)
 	}
-
 	return nil
 }

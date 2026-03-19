@@ -3,6 +3,8 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,9 +15,10 @@ import (
 )
 
 var (
-	queueJSON  bool
-	jobJSON    bool
-	jobTimeout time.Duration
+	queueJSON   bool
+	jobJSON     bool
+	jobTimeout  time.Duration
+	downloadOut bool
 )
 
 var queueCmd = &cobra.Command{
@@ -62,6 +65,7 @@ func init() {
 	jobStatusCmd.Flags().BoolVar(&jobJSON, "json", false, "Output as JSON")
 	jobWaitCmd.Flags().BoolVar(&jobJSON, "json", false, "Output as JSON")
 	jobWaitCmd.Flags().DurationVar(&jobTimeout, "timeout", 30*time.Minute, "Maximum wait time")
+	jobWaitCmd.Flags().BoolVar(&downloadOut, "download", false, "Download outputs after completion")
 }
 
 type promptStatus struct {
@@ -157,6 +161,21 @@ func jobWait(cmd *cobra.Command, args []string) error {
 		}
 
 		if status.Status == "completed" || status.Status == "success" {
+			// Download outputs if requested
+			if downloadOut {
+				hist, err := c.History(promptID)
+				if err == nil {
+					entry, ok := hist[promptID].(map[string]any)
+					if ok {
+						outputs := getMap(entry, "outputs")
+						if len(outputs) > 0 {
+							if err := downloadOutputsFromMap(c, outputs, cfg); err != nil {
+								fmt.Printf("Warning: failed to download outputs: %v\n", err)
+							}
+						}
+					}
+				}
+			}
 			if jobJSON {
 				b, _ := json.MarshalIndent(status, "", "  ")
 				fmt.Println(string(b))
@@ -300,4 +319,56 @@ func contains(items []string, target string) bool {
 		}
 	}
 	return false
+}
+
+// downloadOutputsFromMap fetches and saves outputs from a completed prompt.
+// ComfyUI returns outputs under various keys depending on node type:
+// "images" (SaveImage), "gifs"/"animated" (AnimateDiff/SaveAnimatedWEBP),
+// "videos" (SaveVideo). Check all keys that contain file-reference arrays.
+func downloadOutputsFromMap(c *comfy.Client, outputs map[string]any, cfg *config.Config) error {
+	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create output directory: %w", err)
+	}
+	saved := 0
+	outputKeys := []string{"images", "gifs", "animated", "videos"}
+	for nodeID, out := range outputs {
+		om, ok := out.(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, key := range outputKeys {
+			items, _ := om[key].([]any)
+			for _, iv := range items {
+				im, _ := iv.(map[string]any)
+				filename := getString(im, "filename")
+				subfolder := getString(im, "subfolder")
+				typ := getString(im, "type")
+
+				if filename == "" {
+					fmt.Printf("Warning: empty filename in node %s output\n", nodeID)
+					continue
+				}
+
+				data, err := c.View(filename, subfolder, typ)
+				if err != nil {
+					fmt.Printf("Warning: failed to fetch %s: %v\n", filename, err)
+					continue
+				}
+				outPath := filepath.Join(cfg.OutputDir, filename)
+				if err := os.WriteFile(outPath, data, 0o644); err != nil {
+					return fmt.Errorf("failed to save %s: %w", outPath, err)
+				}
+				fmt.Println("Saved:", outPath)
+				saved++
+			}
+		}
+	}
+
+	if saved == 0 {
+		fmt.Println("Workflow completed (no outputs saved)")
+	} else {
+		fmt.Printf("Workflow completed (%d file(s) saved)\n", saved)
+	}
+
+	return nil
 }

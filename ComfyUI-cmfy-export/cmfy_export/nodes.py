@@ -126,7 +126,7 @@ def build_variables_block(
     variables = {}
     for key, info in wildcards.items():
         # Strip ${...} wrapper if present
-        var_name = key.strip("${}")
+        var_name = key.removeprefix("${").removesuffix("}")
         if not info.get("enabled", False):
             continue
         variables[var_name] = {

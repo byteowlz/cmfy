@@ -66,6 +66,8 @@ func init() {
 	jobWaitCmd.Flags().BoolVar(&jobJSON, "json", false, "Output as JSON")
 	jobWaitCmd.Flags().DurationVar(&jobTimeout, "timeout", 30*time.Minute, "Maximum wait time")
 	jobWaitCmd.Flags().BoolVar(&downloadOut, "download", false, "Download outputs after completion")
+	jobWaitCmd.Flags().StringVarP(&outDir, "output", "o", "", "Output directory override")
+	jobWaitCmd.Flags().StringVar(&outDir, "output-dir", "", "Output directory override (alias for --output)")
 }
 
 type promptStatus struct {
@@ -139,6 +141,9 @@ func jobWait(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
+	}
+	if outDir != "" {
+		cfg.OutputDir = outDir
 	}
 	c := comfy.NewClient(cfg.ServerURL)
 	promptID := args[0]

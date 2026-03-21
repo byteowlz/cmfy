@@ -57,6 +57,7 @@ func init() {
 	runCmd.Flags().StringVarP(&workflowName, "workflow", "w", "", "Workflow name or path (from workflows/ if bare)")
 	runCmd.Flags().StringVar(&baseURL, "server", "", "Override ComfyUI server URL")
 	runCmd.Flags().StringVarP(&outDir, "output", "o", "", "Output directory override")
+	runCmd.Flags().StringVar(&outDir, "output-dir", "", "Output directory override (alias for --output)")
 	runCmd.Flags().StringVar(&outputName, "output-name", "", "Convenience: sets ${OUTPUT} for filename_prefix")
 	runCmd.Flags().StringVar(&promptText, "prompt", "", "Convenience: sets ${PROMPT}")
 	runCmd.Flags().IntVar(&seed, "seed", 0, "Convenience: sets ${SEED}")

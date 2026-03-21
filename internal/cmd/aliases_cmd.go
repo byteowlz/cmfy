@@ -64,6 +64,7 @@ func createAliasCommand(alias string) {
 
 	cmd.Flags().StringVar(&baseURL, "server", "", "Override ComfyUI server URL")
 	cmd.Flags().StringVarP(&outDir, "output", "o", "", "Output directory override")
+	cmd.Flags().StringVar(&outDir, "output-dir", "", "Output directory override (alias for --output)")
 	cmd.Flags().StringVar(&promptText, "prompt", "", "Convenience: sets ${PROMPT}")
 	cmd.Flags().IntVar(&seed, "seed", 0, "Convenience: sets ${SEED}")
 	cmd.Flags().IntVar(&width, "width", 0, "Convenience: sets ${WIDTH}")

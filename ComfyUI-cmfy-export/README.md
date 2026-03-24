@@ -5,7 +5,7 @@ A ComfyUI plugin that exports workflows to [cmfy](https://github.com/byteowlz/cm
 ## Features
 
 - **Export Workflows**: Convert ComfyUI workflows to cmfy-compatible JSON format
-- **Automatic Wildcard Detection**: Automatically identifies common parameter fields (prompts, seeds, dimensions, etc.)
+- **Automatic Wildcard Detection**: Automatically identifies common parameter fields (prompts, seeds, dimensions, tags, lyrics, etc.)
 - **Customizable Wildcards**: Select which fields should become wildcards before export
 - **Menu Integration**: Adds an "Export to cmfy" button to the ComfyUI interface
 - **Python Nodes**: Optional ComfyUI nodes for programmatic workflow conversion
@@ -108,6 +108,8 @@ The plugin automatically detects and converts these common fields:
 | Variable | Used In | Type |
 |----------|---------|------|
 | `${PROMPT}` | CLIPTextEncode | string |
+| `${TAGS}` | TextEncodeAceStepAudio* | string |
+| `${LYRICS}` | TextEncodeAceStepAudio* | string |
 | `${NEGATIVE}` | KSampler | string |
 | `${SEED}` | KSampler, RandomNoise | integer |
 | `${STEPS}` | KSampler, BasicScheduler | integer |

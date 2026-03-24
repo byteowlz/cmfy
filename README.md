@@ -12,6 +12,7 @@ cmfy is a fast, flexible command‑line tool to run ComfyUI workflows. It loads 
 - Precise overrides with `--set <nodeID>.inputs.<name>=<value>` (coerces ints/floats/bools; quoted strings preserved).
 - Asset uploads for images/masks/inputs; exposes `${IMAGE}`, `${MASK}`, `${INPUT}` and enumerated variants.
 - First‑class sampler/refiner flags (`--sampler`, `--scheduler`, `--steps`, `--cfg`, `--denoise`, etc.).
+- Music prompt convenience flags: `--tags` and `--lyrics` map to `${TAGS}` and `${LYRICS}`.
 - Standard workflow aliases (e.g., `txt2img`, `img2img`, …) via `[standard_workflows]` and path mappings via `[standard_workflows_params.<alias>]`.
 
 
@@ -84,6 +85,7 @@ canny2img = ""
 depth2img = ""
 img2vid = ""
 txt2vid = ""
+txt2music = ""
 txt2img_lora = ""
 img2img_inpainting = ""
 
@@ -117,11 +119,15 @@ workflows_dir = "~/ComfyUI/user/default/workflows"
 - Supported formats:
   - Raw prompt map: a JSON object with numeric keys for nodes: `{ "0": { ... }, "1": { ... }, ... }`.
   - Wrapper with `prompt` key: `{ "prompt": { "0": { ... } } }`.
+- Optional workflow metadata keys:
+  - `variables`: variable defaults/descriptions.
+  - `prompt_guidelines` (or `guidelines`): authoring hints for prompt/tag writing.
 
 Inspect a workflow to discover node IDs, class types, and inputs:
 
 ```bash
 ./cmfy workflows inspect txt2img
+./cmfy workflows inspect txt2music --guidelines  # prints optional prompting guidance
 ./cmfy workflows show txt2img      # prints JSON with prompt map
 ./cmfy workflows list              # lists available names in workflows_dir
 
@@ -145,6 +151,9 @@ Basic run:
 
 # Async submit (returns immediately; prints prompt ID)
 ./cmfy run -w txt2img --prompt "a sketch of an owl" --async
+
+# txt2music convenience variables
+./cmfy run -w txt2music --tags "lofi chill, warm keys" --lyrics "Late night city lights"
 ```
 
 Using standard and custom aliases:
@@ -220,11 +229,29 @@ Outputs:
 - Sources (precedence):
   1) Global `[vars]` in config
   2) `[workflows.<name>.vars]` in config
-  3) Convenience flags (`--prompt`, `--seed`, `--width`, `--height`, `--steps`, `--cfg`)
+  3) Convenience flags (`--prompt`, `--tags`, `--lyrics`, `--seed`, `--width`, `--height`, `--steps`, `--cfg`)
   4) `--var KEY=VAL` on CLI
   5) Uploaded assets populate `${IMAGE}`, `${MASK}`, `${INPUT}` and enumerated variants
 - Numeric inputs generally require `--set` unless you model them as strings in the workflow and template them.
 
+Optional prompting guidelines in workflow JSON:
+
+```json
+{
+  "prompt_guidelines": {
+    "summary": "Write cinematic, high-contrast prompts.",
+    "dos": ["Use strong nouns", "Include mood and pacing"],
+    "donts": ["Avoid contradictory styles"],
+    "examples": ["epic trailer score, dark tension, rising strings"]
+  }
+}
+```
+
+Show them with:
+
+```bash
+./cmfy workflows inspect txt2music --guidelines
+```
 
 ## Batch Mode (JSONL)
 

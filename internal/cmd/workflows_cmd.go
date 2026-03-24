@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"cmfy/internal/config"
@@ -12,6 +13,8 @@ import (
 	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
 )
+
+var workflowsInspectShowGuidelines bool
 
 var workflowsCmd = &cobra.Command{
 	Use:   "workflows",
@@ -66,6 +69,7 @@ func init() {
 	workflowsCmd.AddCommand(workflowsAliasesCmd)
 	workflowsCmd.AddCommand(workflowsAssignCmd)
 	workflowsCmd.AddCommand(workflowsAddCmd)
+	workflowsInspectCmd.Flags().BoolVar(&workflowsInspectShowGuidelines, "guidelines", false, "Show optional prompt guidelines for this workflow")
 }
 
 func workflowsList(cmd *cobra.Command, args []string) error {
@@ -122,12 +126,26 @@ func workflowsInspect(cmd *cobra.Command, args []string) error {
 	infos, _ := workflow.Inspect(pr)
 	fmt.Printf("# %s\n", resolved)
 
+	if workflowsInspectShowGuidelines {
+		pg, _, err := workflow.LoadPromptGuidelines(cfg.WorkflowsDir, nameOrPath)
+		if err != nil {
+			return err
+		}
+		fmt.Println()
+		if pg == nil {
+			fmt.Println("Prompt guidelines: none")
+		} else {
+			printPromptGuidelines(pg)
+		}
+	}
+
 	if len(vars) > 0 {
 		fmt.Println("\nVariables:")
 		varNames := make([]string, 0, len(vars))
 		for k := range vars {
 			varNames = append(varNames, k)
 		}
+		sort.Strings(varNames)
 		for _, k := range varNames {
 			v := vars[k]
 			if v.Description != "" {
@@ -149,12 +167,38 @@ func workflowsInspect(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func printPromptGuidelines(pg *workflow.PromptGuidelines) {
+	fmt.Println("Prompt guidelines:")
+	if pg.Summary != "" {
+		fmt.Println("  Summary:", pg.Summary)
+	}
+	if pg.Style != "" {
+		fmt.Println("  Style:", pg.Style)
+	}
+	printGuidelineSection("Do", pg.Dos)
+	printGuidelineSection("Avoid", pg.Donts)
+	printGuidelineSection("Keywords", pg.Keywords)
+	printGuidelineSection("Structure", pg.Structure)
+	printGuidelineSection("Examples", pg.Examples)
+	printGuidelineSection("Notes", pg.Notes)
+}
+
+func printGuidelineSection(title string, items []string) {
+	if len(items) == 0 {
+		return
+	}
+	fmt.Printf("  %s:\n", title)
+	for _, item := range items {
+		fmt.Printf("    - %s\n", item)
+	}
+}
+
 func workflowsAliases(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
-	known := []string{"txt2img", "img2img", "canny2img", "depth2img", "img2vid", "txt2vid", "txt2img_lora", "img2img_inpainting"}
+	known := []string{"txt2img", "img2img", "canny2img", "depth2img", "img2vid", "txt2vid", "txt2music", "txt2img_lora", "img2img_inpainting"}
 	seen := map[string]bool{}
 	for _, k := range known {
 		seen[k] = true

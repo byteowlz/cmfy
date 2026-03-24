@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var aliases = []string{"txt2img", "img2img", "canny2img", "depth2img", "img2vid", "txt2vid", "txt2img_lora", "img2img_inpainting", "rmb"}
+var aliases = []string{"txt2img", "img2img", "canny2img", "depth2img", "img2vid", "txt2vid", "txt2music", "txt2img_lora", "img2img_inpainting", "rmb"}
 
 func init() {
 	registered := map[string]bool{}
@@ -65,6 +65,8 @@ func createAliasCommand(alias string) {
 	cmd.Flags().StringVar(&baseURL, "server", "", "Override ComfyUI server URL")
 	cmd.Flags().StringVarP(&outDir, "output", "o", "", "Output directory override")
 	cmd.Flags().StringVar(&promptText, "prompt", "", "Convenience: sets ${PROMPT}")
+	cmd.Flags().StringVar(&tagsText, "tags", "", "Convenience: sets ${TAGS} (txt2music)")
+	cmd.Flags().StringVar(&lyricsText, "lyrics", "", "Convenience: sets ${LYRICS} (txt2music)")
 	cmd.Flags().IntVar(&seed, "seed", 0, "Convenience: sets ${SEED}")
 	cmd.Flags().IntVar(&width, "width", 0, "Convenience: sets ${WIDTH}")
 	cmd.Flags().IntVar(&height, "height", 0, "Convenience: sets ${HEIGHT}")

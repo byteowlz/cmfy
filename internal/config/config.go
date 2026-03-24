@@ -84,6 +84,7 @@ func InitDefault() error {
 		"depth2img":          "",
 		"img2vid":            "",
 		"txt2vid":            "",
+		"txt2music":          "",
 		"txt2img_lora":       "",
 		"img2img_inpainting": "",
 		"rmb":                "",
@@ -242,7 +243,7 @@ func (c *Config) ToTOML() string {
 	}
 	if len(c.StandardWorkflows) > 0 {
 		fmt.Fprintf(&b, "[standard_workflows]\n")
-		known := []string{"txt2img", "img2img", "canny2img", "depth2img", "img2vid", "txt2vid", "txt2img_lora", "img2img_inpainting", "rmb"}
+		known := []string{"txt2img", "img2img", "canny2img", "depth2img", "img2vid", "txt2vid", "txt2music", "txt2img_lora", "img2img_inpainting", "rmb"}
 		emitted := map[string]bool{}
 		for _, k := range known {
 			if v, ok := c.StandardWorkflows[k]; ok {

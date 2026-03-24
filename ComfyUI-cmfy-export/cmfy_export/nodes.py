@@ -19,6 +19,8 @@ WILDCARD_RULES = [
     # Prompts / text - match any node with direct text values
     ("text",       "PROMPT",   r".*",                       True),
     ("prompt",     "PROMPT",   r".*",                       True),
+    ("tags",       "TAGS",     r"TextEncodeAceStepAudio",  True),
+    ("lyrics",     "LYRICS",   r"TextEncodeAceStepAudio",  True),
     ("system",     "SYSTEM",   r"Ollama|LLM",              False),
     ("string_a",   None,       r"Concat|String",            False),
     ("string_b",   None,       r"Concat|String",            False),
@@ -81,7 +83,8 @@ def detect_wildcard_fields(
             title = (node_data.get("_meta") or {}).get("title", class_type)
             field_value = inputs.get(field)
 
-            if field_value is None or isinstance(field_value, list):
+            allow_linked_string_field = field in {"tags", "lyrics", "text", "prompt"}
+            if field_value is None or (isinstance(field_value, list) and not allow_linked_string_field):
                 continue
             # Skip values that are already wildcard placeholders
             if isinstance(field_value, str) and re.match(r'^\$\{.+\}$', field_value):
@@ -129,8 +132,9 @@ def build_variables_block(
         var_name = key.strip("${}")
         if not info.get("enabled", False):
             continue
+        default_value = "" if isinstance(info["value"], list) else str(info["value"])
         variables[var_name] = {
-            "default": str(info["value"]),
+            "default": default_value,
             "description": f"{info.get('field', '')} on {info.get('class_type', 'unknown')}",
         }
     return variables

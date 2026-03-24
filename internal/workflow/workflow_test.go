@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"encoding/json"
+	"os"
 	"testing"
 )
 
@@ -9,30 +10,30 @@ func TestApplyVarsWithDefaults(t *testing.T) {
 	prompt := map[string]interface{}{
 		"1": map[string]interface{}{
 			"inputs": map[string]interface{}{
-				"seed": "${SEED}",
+				"seed":  "${SEED}",
 				"steps": "${STEPS}",
 			},
 		},
 	}
-	
+
 	defaults := map[string]VariableMetadata{
-		"SEED": {Default: "12345"},
+		"SEED":  {Default: "12345"},
 		"STEPS": {Default: "20"},
 	}
-	
+
 	userVars := map[string]string{
 		"SEED": "99999",
 	}
-	
+
 	ApplyVarsWithDefaults(prompt, userVars, defaults)
-	
+
 	node := prompt["1"].(map[string]interface{})
 	inputs := node["inputs"].(map[string]interface{})
-	
+
 	if inputs["seed"] != 99999 {
 		t.Errorf("Expected seed to be 99999 (user override), got %v", inputs["seed"])
 	}
-	
+
 	if inputs["steps"] != 20 {
 		t.Errorf("Expected steps to be 20 (default), got %v", inputs["steps"])
 	}
@@ -43,7 +44,7 @@ func TestSuggestVariables(t *testing.T) {
 		"3": map[string]interface{}{
 			"class_type": "KSampler",
 			"inputs": map[string]interface{}{
-				"seed": 12345,
+				"seed":  12345,
 				"steps": 20,
 			},
 		},
@@ -54,18 +55,18 @@ func TestSuggestVariables(t *testing.T) {
 			},
 		},
 	}
-	
+
 	candidates := SuggestVariables(prompt)
-	
+
 	if len(candidates) != 3 {
 		t.Errorf("Expected 3 candidates, got %d", len(candidates))
 	}
-	
+
 	found := make(map[string]bool)
 	for _, c := range candidates {
 		found[c.SuggestedVar] = true
 	}
-	
+
 	if !found["SEED"] {
 		t.Error("Expected SEED variable suggestion")
 	}
@@ -77,6 +78,86 @@ func TestSuggestVariables(t *testing.T) {
 	}
 }
 
+func TestSuggestVariablesTxt2MusicFields(t *testing.T) {
+	prompt := map[string]interface{}{
+		"94": map[string]interface{}{
+			"class_type": "TextEncodeAceStepAudio1.5",
+			"inputs": map[string]interface{}{
+				"tags":   "",
+				"lyrics": "",
+			},
+		},
+	}
+
+	candidates := SuggestVariables(prompt)
+	if len(candidates) != 2 {
+		t.Fatalf("Expected 2 candidates, got %d", len(candidates))
+	}
+
+	found := map[string]bool{}
+	for _, c := range candidates {
+		found[c.SuggestedVar] = true
+	}
+
+	if !found["TAGS"] {
+		t.Error("Expected TAGS variable suggestion")
+	}
+	if !found["LYRICS"] {
+		t.Error("Expected LYRICS variable suggestion")
+	}
+}
+
+func TestLoadPromptGuidelines(t *testing.T) {
+	tmpFile := "/tmp/test_workflow_guidelines.json"
+	content := `{
+	  "1": {"class_type":"KSampler","inputs":{"seed":1}},
+	  "prompt_guidelines": {
+	    "summary": "Write cinematic prompts",
+	    "dos": ["Use clear style words"],
+	    "donts": ["Avoid contradictions"]
+	  }
+	}`
+	if err := os.WriteFile(tmpFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+
+	pg, _, err := LoadPromptGuidelines("", tmpFile)
+	if err != nil {
+		t.Fatalf("LoadPromptGuidelines failed: %v", err)
+	}
+	if pg == nil {
+		t.Fatal("expected guidelines")
+	}
+	if pg.Summary != "Write cinematic prompts" {
+		t.Fatalf("unexpected summary: %q", pg.Summary)
+	}
+	if len(pg.Dos) != 1 || pg.Dos[0] != "Use clear style words" {
+		t.Fatalf("unexpected dos: %#v", pg.Dos)
+	}
+}
+
+func TestInspectIgnoresMetadataKeys(t *testing.T) {
+	prompt := map[string]interface{}{
+		"1": map[string]interface{}{
+			"class_type": "KSampler",
+			"inputs":     map[string]interface{}{"seed": 1},
+		},
+		"variables":         map[string]interface{}{"SEED": map[string]interface{}{"default": "1"}},
+		"prompt_guidelines": map[string]interface{}{"summary": "x"},
+	}
+
+	nodes, err := Inspect(prompt)
+	if err != nil {
+		t.Fatalf("Inspect failed: %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(nodes))
+	}
+	if nodes[0].ID != "1" {
+		t.Fatalf("unexpected node id: %s", nodes[0].ID)
+	}
+}
+
 func TestSaveAndLoad(t *testing.T) {
 	prompt := map[string]interface{}{
 		"1": map[string]interface{}{
@@ -85,34 +166,34 @@ func TestSaveAndLoad(t *testing.T) {
 			},
 		},
 	}
-	
+
 	vars := map[string]VariableMetadata{
 		"SEED": {Default: "12345", Description: "Random seed"},
 	}
-	
+
 	tmpFile := "/tmp/test_workflow_save.json"
-	
+
 	if err := Save(tmpFile, prompt, vars); err != nil {
 		t.Fatalf("Save failed: %v", err)
 	}
-	
+
 	loadedPrompt, _, loadedVars, err := LoadWithVars("", tmpFile)
 	if err != nil {
 		t.Fatalf("LoadWithVars failed: %v", err)
 	}
-	
+
 	if len(loadedVars) != 1 {
 		t.Errorf("Expected 1 variable, got %d", len(loadedVars))
 	}
-	
+
 	if loadedVars["SEED"].Default != "12345" {
 		t.Errorf("Expected SEED default to be 12345, got %s", loadedVars["SEED"].Default)
 	}
-	
+
 	if loadedVars["SEED"].Description != "Random seed" {
 		t.Errorf("Expected SEED description to be 'Random seed', got %s", loadedVars["SEED"].Description)
 	}
-	
+
 	promptJSON, _ := json.Marshal(prompt)
 	loadedJSON, _ := json.Marshal(loadedPrompt)
 	if string(promptJSON) != string(loadedJSON) {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -32,7 +33,7 @@ func Inspect(prompt map[string]interface{}) ([]NodeInfo, error) {
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	for _, id := range ids {
 		raw := prompt[id]
-		nm, ok := raw.(map[string]interface{})
+		nm, ok := asPromptNode(id, raw)
 		if !ok {
 			continue
 		}
@@ -52,11 +53,13 @@ func Inspect(prompt map[string]interface{}) ([]NodeInfo, error) {
 func FindNodesWithInput(prompt map[string]interface{}, key string) []string {
 	var ids []string
 	for id, raw := range prompt {
-		if nm, ok := raw.(map[string]interface{}); ok {
-			if in, ok := nm["inputs"].(map[string]interface{}); ok {
-				if _, ok := in[key]; ok {
-					ids = append(ids, id)
-				}
+		nm, ok := asPromptNode(id, raw)
+		if !ok {
+			continue
+		}
+		if in, ok := nm["inputs"].(map[string]interface{}); ok {
+			if _, ok := in[key]; ok {
+				ids = append(ids, id)
 			}
 		}
 	}
@@ -91,7 +94,7 @@ func SuggestVariables(prompt map[string]interface{}) []VariableCandidate {
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 
 	for _, id := range ids {
-		node, ok := prompt[id].(map[string]interface{})
+		node, ok := asPromptNode(id, prompt[id])
 		if !ok {
 			continue
 		}
@@ -134,6 +137,20 @@ func SuggestVariables(prompt map[string]interface{}) []VariableCandidate {
 func isNodeReference(value interface{}) bool {
 	arr, ok := value.([]interface{})
 	return ok && len(arr) == 2
+}
+
+func asPromptNode(id string, raw interface{}) (map[string]interface{}, bool) {
+	if _, err := strconv.Atoi(id); err != nil {
+		return nil, false
+	}
+	nm, ok := raw.(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+	if _, ok := nm["inputs"].(map[string]interface{}); !ok {
+		return nil, false
+	}
+	return nm, true
 }
 
 func suggestVariableName(classType, inputName string, value interface{}, varPattern *regexp.Regexp, usedNames map[string]int) string {

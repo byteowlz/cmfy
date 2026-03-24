@@ -14,6 +14,8 @@ const WILDCARD_RULES = [
     // Prompts / text
     { field: "text",     varName: "PROMPT",   match: /.*/,                       enabled: true  },
     { field: "prompt",   varName: "PROMPT",   match: /.*/,                       enabled: true  },
+    { field: "tags",     varName: "TAGS",     match: /TextEncodeAceStepAudio/i, enabled: true  },
+    { field: "lyrics",   varName: "LYRICS",   match: /TextEncodeAceStepAudio/i, enabled: true  },
     { field: "system",   varName: "SYSTEM",   match: /Ollama|LLM/i,             enabled: false },
     { field: "string_a", varName: null,       match: /Concat|String/i,           enabled: false },
     { field: "string_b", varName: null,       match: /Concat|String/i,           enabled: false },
@@ -60,7 +62,7 @@ const WILDCARD_RULES = [
 // Group fields into semantic types so that compatible fields can be
 // swapped in the dropdown (e.g. "text" and "value" are both strings).
 const FIELD_GROUPS = {
-    string: ["text", "prompt", "value", "string", "string_a", "string_b", "system"],
+    string: ["text", "prompt", "tags", "lyrics", "value", "string", "string_a", "string_b", "system"],
     integer: ["seed", "noise_seed", "steps", "width", "height", "batch_size", "int", "cfg"],
     float: ["denoise", "guidance", "strength_model", "strength_clip", "float"],
     file: ["image", "ckpt_name", "unet_name", "vae_name", "lora_name",
@@ -85,7 +87,8 @@ function buildGroupedCandidates(workflow) {
         const cls   = node.class_type || "";
         const title = node._meta?.title || cls;
         for (const [field, value] of Object.entries(node.inputs)) {
-            if (Array.isArray(value)) continue;
+            const allowLinkedStringField = (field === "tags" || field === "lyrics" || field === "text" || field === "prompt");
+            if (Array.isArray(value) && !allowLinkedStringField) continue;
             if (typeof value === "string" && /^\$\{.+\}$/.test(value)) continue;
             const group = fieldGroup(field);
             if (!groups[group]) groups[group] = [];
@@ -109,7 +112,8 @@ function detectWildcards(workflow) {
             const title = node._meta?.title || cls;
             const value = node.inputs[rule.field];
 
-            if (value === undefined || Array.isArray(value)) continue;
+            const allowLinkedStringField = (rule.field === "tags" || rule.field === "lyrics" || rule.field === "text" || rule.field === "prompt");
+            if (value === undefined || (Array.isArray(value) && !allowLinkedStringField)) continue;
             if (typeof value === "string" && /^\$\{.+\}$/.test(value)) continue;
             if (!rule.match.test(cls)) continue;
 
@@ -239,7 +243,7 @@ async function showExportDialog() {
                 const opts = (grouped[group] || []);
                 const optionsHtml = opts.map(c => {
                     const sel = (c.nodeId === w.nodeId && c.field === w.field) ? "selected" : "";
-                    const preview = String(c.value).substring(0, 45);
+                    const preview = Array.isArray(c.value) ? "[linked input]" : String(c.value).substring(0, 45);
                     // Encode both nodeId and field in the value so we can extract them on export
                     const optVal = c.nodeId + "|" + c.field;
                     return `<option value="${escapeHtml(optVal)}" ${sel}>[${escapeHtml(c.nodeId)}] ${escapeHtml(c.title)} .${escapeHtml(c.field)} = ${escapeHtml(preview)}</option>`;
@@ -307,7 +311,7 @@ async function showExportDialog() {
         for (const e of finalEntries) {
             if (!e.enabled) continue;
             variables[e.varName] = {
-                "default": String(e.originalValue),
+                "default": Array.isArray(e.originalValue) ? "" : String(e.originalValue),
                 "description": e.field + " on " + (e.classType || "unknown"),
             };
         }

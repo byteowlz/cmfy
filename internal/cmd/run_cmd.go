@@ -21,6 +21,8 @@ var (
 	outDir       string
 	outputName   string
 	promptText   string
+	tagsText     string
+	lyricsText   string
 	seed         int
 	width        int
 	height       int
@@ -59,6 +61,8 @@ func init() {
 	runCmd.Flags().StringVarP(&outDir, "output", "o", "", "Output directory override")
 	runCmd.Flags().StringVar(&outputName, "output-name", "", "Convenience: sets ${OUTPUT} for filename_prefix")
 	runCmd.Flags().StringVar(&promptText, "prompt", "", "Convenience: sets ${PROMPT}")
+	runCmd.Flags().StringVar(&tagsText, "tags", "", "Convenience: sets ${TAGS} (txt2music)")
+	runCmd.Flags().StringVar(&lyricsText, "lyrics", "", "Convenience: sets ${LYRICS} (txt2music)")
 	runCmd.Flags().IntVar(&seed, "seed", 0, "Convenience: sets ${SEED}")
 	runCmd.Flags().IntVar(&width, "width", 0, "Convenience: sets ${WIDTH}")
 	runCmd.Flags().IntVar(&height, "height", 0, "Convenience: sets ${HEIGHT}")
@@ -124,9 +128,11 @@ func runWorkflow(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	// Remove the variables block so ComfyUI doesn't treat it as a node
+	// Remove metadata blocks so ComfyUI doesn't treat them as nodes
 	delete(prompt, "#variables")
 	delete(prompt, "variables")
+	delete(prompt, "prompt_guidelines")
+	delete(prompt, "guidelines")
 
 	vars := map[string]string{}
 	for k, v := range cfg.Vars {
@@ -145,6 +151,12 @@ func runWorkflow(cmd *cobra.Command, args []string) error {
 	}
 	if promptText != "" {
 		vars["PROMPT"] = promptText
+	}
+	if tagsText != "" {
+		vars["TAGS"] = tagsText
+	}
+	if lyricsText != "" {
+		vars["LYRICS"] = lyricsText
 	}
 	if seed != 0 {
 		vars["SEED"] = fmt.Sprintf("%d", seed)

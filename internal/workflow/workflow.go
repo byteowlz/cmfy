@@ -18,18 +18,22 @@ type VariableMetadata struct {
 	Description string `json:"description,omitempty"`
 }
 
+type PromptGuidelines struct {
+	Summary   string   `json:"summary,omitempty"`
+	Style     string   `json:"style,omitempty"`
+	Dos       []string `json:"dos,omitempty"`
+	Donts     []string `json:"donts,omitempty"`
+	Keywords  []string `json:"keywords,omitempty"`
+	Structure []string `json:"structure,omitempty"`
+	Examples  []string `json:"examples,omitempty"`
+	Notes     []string `json:"notes,omitempty"`
+}
+
 // Load loads a workflow prompt JSON from name or path.
 // If name is bare, reads from baseDir/<name>.json.
 // Returns the prompt map, resolved path, variables metadata, and error.
 func Load(baseDir, nameOrPath string) (map[string]interface{}, string, error) {
-	p := nameOrPath
-	if !fileExists(p) {
-		if !strings.Contains(filepath.Base(p), ".") {
-			p = filepath.Join(baseDir, nameOrPath+".json")
-		} else {
-			p = filepath.Join(baseDir, nameOrPath)
-		}
-	}
+	p := resolveWorkflowPath(baseDir, nameOrPath)
 	b, err := os.ReadFile(p)
 	if err != nil {
 		return nil, "", err
@@ -55,14 +59,7 @@ func Load(baseDir, nameOrPath string) (map[string]interface{}, string, error) {
 }
 
 func LoadWithVars(baseDir, nameOrPath string) (map[string]interface{}, string, map[string]VariableMetadata, error) {
-	p := nameOrPath
-	if !fileExists(p) {
-		if !strings.Contains(filepath.Base(p), ".") {
-			p = filepath.Join(baseDir, nameOrPath+".json")
-		} else {
-			p = filepath.Join(baseDir, nameOrPath)
-		}
-	}
+	p := resolveWorkflowPath(baseDir, nameOrPath)
 	b, err := os.ReadFile(p)
 	if err != nil {
 		return nil, "", nil, err
@@ -102,6 +99,110 @@ func LoadWithVars(baseDir, nameOrPath string) (map[string]interface{}, string, m
 		return pr, p, vars, nil
 	}
 	return nil, "", nil, errors.New("unsupported workflow JSON format: expected prompt map or {prompt: {...}}")
+}
+
+func LoadPromptGuidelines(baseDir, nameOrPath string) (*PromptGuidelines, string, error) {
+	p := resolveWorkflowPath(baseDir, nameOrPath)
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return nil, "", err
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, "", fmt.Errorf("invalid workflow JSON: %w", err)
+	}
+
+	raw, ok := m["prompt_guidelines"]
+	if !ok {
+		raw, ok = m["guidelines"]
+	}
+	if !ok {
+		return nil, p, nil
+	}
+
+	pg := parsePromptGuidelines(raw)
+	if pg == nil {
+		return nil, p, nil
+	}
+	return pg, p, nil
+}
+
+func parsePromptGuidelines(raw interface{}) *PromptGuidelines {
+	if raw == nil {
+		return nil
+	}
+	pg := &PromptGuidelines{}
+	switch v := raw.(type) {
+	case string:
+		pg.Summary = strings.TrimSpace(v)
+	case map[string]interface{}:
+		if s, ok := v["summary"].(string); ok {
+			pg.Summary = strings.TrimSpace(s)
+		}
+		if s, ok := v["style"].(string); ok {
+			pg.Style = strings.TrimSpace(s)
+		}
+		pg.Dos = toStringSlice(v["dos"])
+		pg.Donts = toStringSlice(v["donts"])
+		pg.Keywords = toStringSlice(v["keywords"])
+		pg.Structure = toStringSlice(v["structure"])
+		pg.Examples = toStringSlice(v["examples"])
+		pg.Notes = toStringSlice(v["notes"])
+	case []interface{}:
+		pg.Notes = toStringSlice(v)
+	default:
+		return nil
+	}
+
+	if pg.Summary == "" && pg.Style == "" && len(pg.Dos) == 0 && len(pg.Donts) == 0 && len(pg.Keywords) == 0 && len(pg.Structure) == 0 && len(pg.Examples) == 0 && len(pg.Notes) == 0 {
+		return nil
+	}
+	return pg
+}
+
+func toStringSlice(raw interface{}) []string {
+	if raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case string:
+		s := strings.TrimSpace(v)
+		if s == "" {
+			return nil
+		}
+		return []string{s}
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			s, ok := item.(string)
+			if !ok {
+				continue
+			}
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			out = append(out, s)
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func resolveWorkflowPath(baseDir, nameOrPath string) string {
+	p := nameOrPath
+	if fileExists(p) {
+		return p
+	}
+	if !strings.Contains(filepath.Base(p), ".") {
+		return filepath.Join(baseDir, nameOrPath+".json")
+	}
+	return filepath.Join(baseDir, nameOrPath)
 }
 
 func fileExists(p string) bool {

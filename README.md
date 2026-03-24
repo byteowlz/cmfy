@@ -220,6 +220,7 @@ How first‑class flags are applied:
 Outputs:
 
 - Saved to `output_dir` (default `./outputs`).
+- Override per run with `--output`/`-o` or `--output-dir` (all workflow commands, including aliases like `cmfy txt2img`).
 - Filenames are taken from the server’s `/view` endpoint responses.
 
 

@@ -23,6 +23,7 @@ var (
 	promptText   string
 	tagsText     string
 	lyricsText   string
+	maxTokens    int
 	seed         int
 	width        int
 	height       int
@@ -64,6 +65,7 @@ func init() {
 	runCmd.Flags().StringVar(&promptText, "prompt", "", "Convenience: sets ${PROMPT}")
 	runCmd.Flags().StringVar(&tagsText, "tags", "", "Convenience: sets ${TAGS} (txt2music)")
 	runCmd.Flags().StringVar(&lyricsText, "lyrics", "", "Convenience: sets ${LYRICS} (txt2music)")
+	runCmd.Flags().IntVar(&maxTokens, "max-tokens", 0, "Convenience: sets ${MAX_TOKENS} (VoxCPM2 audio length)")
 	runCmd.Flags().IntVar(&seed, "seed", 0, "Convenience: sets ${SEED}")
 	runCmd.Flags().IntVar(&width, "width", 0, "Convenience: sets ${WIDTH}")
 	runCmd.Flags().IntVar(&height, "height", 0, "Convenience: sets ${HEIGHT}")
@@ -158,6 +160,9 @@ func runWorkflow(cmd *cobra.Command, args []string) error {
 	}
 	if lyricsText != "" {
 		vars["LYRICS"] = lyricsText
+	}
+	if maxTokens != 0 {
+		vars["MAX_TOKENS"] = fmt.Sprintf("%d", maxTokens)
 	}
 	if seed != 0 {
 		vars["SEED"] = fmt.Sprintf("%d", seed)

@@ -68,6 +68,7 @@ func createAliasCommand(alias string) {
 	cmd.Flags().StringVar(&promptText, "prompt", "", "Convenience: sets ${PROMPT}")
 	cmd.Flags().StringVar(&tagsText, "tags", "", "Convenience: sets ${TAGS} (txt2music)")
 	cmd.Flags().StringVar(&lyricsText, "lyrics", "", "Convenience: sets ${LYRICS} (txt2music)")
+	cmd.Flags().IntVar(&maxTokens, "max-tokens", 0, "Convenience: sets ${MAX_TOKENS} (VoxCPM2 audio length)")
 	cmd.Flags().IntVar(&seed, "seed", 0, "Convenience: sets ${SEED}")
 	cmd.Flags().IntVar(&width, "width", 0, "Convenience: sets ${WIDTH}")
 	cmd.Flags().IntVar(&height, "height", 0, "Convenience: sets ${HEIGHT}")

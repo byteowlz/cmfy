@@ -17,10 +17,13 @@ import re
 
 WILDCARD_RULES = [
     # Prompts / text - match any node with direct text values
-    ("text",       "PROMPT",   r".*",                       True),
-    ("prompt",     "PROMPT",   r".*",                       True),
-    ("tags",       "TAGS",     r"TextEncodeAceStepAudio",  True),
-    ("lyrics",     "LYRICS",   r"TextEncodeAceStepAudio",  True),
+    ("text",               "PROMPT",  r".*",                       True),
+    ("prompt",             "PROMPT",  r".*",                       True),
+    ("voice_description",  "VOICE",       r"VoxCPM2",                  True),
+    ("prompt_text",        "PROMPT",      r"VoxCPM2",                  True),
+    ("max_tokens",         "MAX_TOKENS",  r"VoxCPM2",                  True),
+    ("tags",               "TAGS",    r"TextEncodeAceStepAudio",  True),
+    ("lyrics",             "LYRICS",  r"TextEncodeAceStepAudio",  True),
     ("system",     "SYSTEM",   r"Ollama|LLM",              False),
     ("string_a",   None,       r"Concat|String",            False),
     ("string_b",   None,       r"Concat|String",            False),
@@ -40,6 +43,8 @@ WILDCARD_RULES = [
     ("batch_size",   "BATCH",     r".*",                    False),
     # Images
     ("image",           "IMAGE",  r"LoadImage",             True),
+    # Audio
+    ("audio",           "AUDIO",  r"LoadAudio",             True),
     ("filename_prefix", "OUTPUT", r"Save",                  True),
     # Models / LoRA
     ("ckpt_name",      "CKPT",          r"Checkpoint",      False),

@@ -14,6 +14,9 @@ const WILDCARD_RULES = [
     // Prompts / text
     { field: "text",     varName: "PROMPT",   match: /.*/,                       enabled: true  },
     { field: "prompt",   varName: "PROMPT",   match: /.*/,                       enabled: true  },
+    { field: "voice_description", varName: "VOICE",       match: /VoxCPM2/i,      enabled: true  },
+    { field: "prompt_text",       varName: "PROMPT",      match: /VoxCPM2/i,      enabled: true  },
+    { field: "max_tokens",        varName: "MAX_TOKENS",  match: /VoxCPM2/i,      enabled: true  },
     { field: "tags",     varName: "TAGS",     match: /TextEncodeAceStepAudio/i, enabled: true  },
     { field: "lyrics",   varName: "LYRICS",   match: /TextEncodeAceStepAudio/i, enabled: true  },
     { field: "system",   varName: "SYSTEM",   match: /Ollama|LLM/i,             enabled: false },
@@ -39,6 +42,8 @@ const WILDCARD_RULES = [
 
     // Images
     { field: "image",           varName: "IMAGE",  match: /LoadImage/,           enabled: true  },
+    // Audio
+    { field: "audio",           varName: "AUDIO",  match: /LoadAudio/,           enabled: true  },
     { field: "filename_prefix", varName: "OUTPUT", match: /Save/i,              enabled: true  },
 
     // Models / LoRA
@@ -62,10 +67,10 @@ const WILDCARD_RULES = [
 // Group fields into semantic types so that compatible fields can be
 // swapped in the dropdown (e.g. "text" and "value" are both strings).
 const FIELD_GROUPS = {
-    string: ["text", "prompt", "tags", "lyrics", "value", "string", "string_a", "string_b", "system"],
-    integer: ["seed", "noise_seed", "steps", "width", "height", "batch_size", "int", "cfg"],
+    string: ["text", "prompt", "voice_description", "prompt_text", "tags", "lyrics", "value", "string", "string_a", "string_b", "system"],
+    integer: ["seed", "noise_seed", "steps", "width", "height", "batch_size", "max_tokens", "int", "cfg"],
     float: ["denoise", "guidance", "strength_model", "strength_clip", "float"],
-    file: ["image", "ckpt_name", "unet_name", "vae_name", "lora_name",
+    file: ["image", "audio", "ckpt_name", "unet_name", "vae_name", "lora_name",
            "clip_name", "clip_name1", "clip_name2", "filename_prefix"],
 };
 

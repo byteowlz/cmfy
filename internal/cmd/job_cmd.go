@@ -329,13 +329,13 @@ func contains(items []string, target string) bool {
 // downloadOutputsFromMap fetches and saves outputs from a completed prompt.
 // ComfyUI returns outputs under various keys depending on node type:
 // "images" (SaveImage), "gifs"/"animated" (AnimateDiff/SaveAnimatedWEBP),
-// "videos" (SaveVideo). Check all keys that contain file-reference arrays.
+// "videos" (SaveVideo), "audio" (SaveAudioMP3/SaveAudio). Check all keys that contain file-reference arrays.
 func downloadOutputsFromMap(c *comfy.Client, outputs map[string]any, cfg *config.Config) error {
 	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 	saved := 0
-	outputKeys := []string{"images", "gifs", "animated", "videos"}
+	outputKeys := []string{"images", "gifs", "animated", "videos", "audio"}
 	for nodeID, out := range outputs {
 		om, ok := out.(map[string]any)
 		if !ok {

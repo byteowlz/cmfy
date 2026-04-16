@@ -108,6 +108,8 @@ The plugin automatically detects and converts these common fields:
 | Variable | Used In | Type |
 |----------|---------|------|
 | `${PROMPT}` | CLIPTextEncode | string |
+| `${VOICE}` | VoxCPM2* | string |
+| `${MAX_TOKENS}` | VoxCPM2* | integer (controls audio length) |
 | `${TAGS}` | TextEncodeAceStepAudio* | string |
 | `${LYRICS}` | TextEncodeAceStepAudio* | string |
 | `${NEGATIVE}` | KSampler | string |
@@ -118,6 +120,7 @@ The plugin automatically detects and converts these common fields:
 | `${HEIGHT}` | EmptyLatentImage | integer |
 | `${DENOISE}` | KSampler | float |
 | `${IMAGE}` | LoadImage | file |
+| `${AUDIO}` | LoadAudio | file |
 | `${OUTPUT}` | SaveImage | string |
 | `${GUIDANCE}` | FluxGuidance | float |
 

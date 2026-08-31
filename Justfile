@@ -56,3 +56,19 @@ update:
 
 docs:
     go doc ./cmd/cmfy
+
+# Publish cmfy's agent skill to the canonical byteowlz skills repository.
+sync-skills:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    target="${SKILLISSUES:-$HOME/byteowlz/skillissues}"
+    test -d "$target/skills" || { echo "skillissues repo not found: $target" >&2; exit 1; }
+    rm -rf "$target/skills/cmfy-cli"
+    cp -a skills/cmfy-cli "$target/skills/"
+    just --justfile "$target/Justfile" update-readme
+    git -C "$target" add skills/cmfy-cli README.md
+    if [[ -n "$(git -C "$target" status --porcelain -- skills/cmfy-cli README.md)" ]]; then
+        git -C "$target" commit -m "skills/cmfy-cli: sync from cmfy" -- skills/cmfy-cli README.md
+    else
+        echo "cmfy-cli is already up to date"
+    fi

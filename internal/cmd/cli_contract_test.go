@@ -96,15 +96,22 @@ func TestMachineCLIContracts(t *testing.T) {
 	if shown := runJSON("jobs", "show", "prompt-1"); shown["request_id"] != "request-1" {
 		t.Fatalf("unexpected job: %#v", shown)
 	}
+	if status := runJSON("jobs", "status", "prompt-1"); status["status"] != "queued" {
+		t.Fatalf("unexpected reconciled job: %#v", status)
+	}
 	if plan := runJSON("run", "--plan", "--workflow", "test", "--prompt", "plan"); plan["schema"] != "cmfy/execution-plan-v1" || !plan["server_validation"].(map[string]any)["valid"].(bool) {
 		t.Fatalf("unexpected plan: %#v", plan)
 	}
 	for _, arguments := range [][]string{
+		{"config", "path"},
+		{"config", "output"},
+		{"config", "print"},
 		{"workflows", "list"},
 		{"workflows", "show", "test"},
 		{"workflows", "inspect", "test"},
 		{"workflows", "describe", "test"},
 		{"workflows", "validate", "test"},
+		{"workflows", "aliases"},
 		{"--profile", "test", "server", "ping"},
 		{"server", "ping"},
 		{"server", "inspect"},

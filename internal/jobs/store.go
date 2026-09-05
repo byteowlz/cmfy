@@ -58,6 +58,7 @@ type Output struct {
 }
 
 type Record struct {
+	Schema         string         `json:"schema"`
 	ID             string         `json:"id"`
 	RequestID      string         `json:"request_id"`
 	PromptID       string         `json:"prompt_id,omitempty"`
@@ -90,6 +91,7 @@ type ListOptions struct {
 }
 
 type Page struct {
+	Schema     string   `json:"schema"`
 	Jobs       []Record `json:"jobs"`
 	NextCursor string   `json:"next_cursor,omitempty"`
 }
@@ -406,7 +408,7 @@ func (s *Store) List(ctx context.Context, options ListOptions) (Page, error) {
 		return Page{}, fmt.Errorf("list jobs: %w", err)
 	}
 	defer rows.Close()
-	page := Page{Jobs: make([]Record, 0, limit)}
+	page := Page{Schema: "cmfy/jobs-page-v1", Jobs: make([]Record, 0, limit)}
 	for rows.Next() {
 		record, err := scanRecord(rows)
 		if err != nil {
@@ -432,7 +434,7 @@ type scanner interface {
 }
 
 func scanRecord(row scanner) (Record, error) {
-	var record Record
+	record := Record{Schema: "cmfy/job-v1"}
 	var parameters, inputs, outputs, submittedAt, updatedAt string
 	if err := row.Scan(&record.ID, &record.RequestID, &record.PromptID, &record.ServerID, &record.Workflow, &record.WorkflowDigest, &record.Prompt, &parameters, &inputs, &record.Status, &submittedAt, &updatedAt, &outputs, &record.Error, &record.Revision); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

@@ -16,6 +16,8 @@ import (
 	"cmfy/internal/config"
 	"cmfy/internal/engine"
 	"cmfy/internal/jobs"
+
+	"github.com/gorilla/websocket"
 )
 
 func TestResolveSubmitObserveCollectUsesOneDurableSubstrate(t *testing.T) {
@@ -117,6 +119,59 @@ func TestResolveSubmitObserveCollectUsesOneDurableSubstrate(t *testing.T) {
 	}
 }
 
+func TestCancelReportsExplicitQueuedAndRunningOutcomes(t *testing.T) {
+	t.Parallel()
+	var queueDeletes atomic.Int32
+	var interrupts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/history/queued-prompt" || r.URL.Path == "/history/running-prompt":
+			_, _ = w.Write([]byte(`{}`))
+		case r.URL.Path == "/queue" && r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{"queue_running":[[0,"running-prompt"]],"queue_pending":[[0,"queued-prompt"]]}`))
+		case r.URL.Path == "/queue" && r.Method == http.MethodPost:
+			queueDeletes.Add(1)
+			_, _ = w.Write([]byte(`{}`))
+		case r.URL.Path == "/interrupt":
+			interrupts.Add(1)
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	store, err := jobs.Open(filepath.Join(t.TempDir(), "history.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	for _, pair := range [][2]string{{"queued-request", "queued-prompt"}, {"running-request", "running-prompt"}} {
+		if _, _, err := store.Reserve(ctx, jobs.Submission{RequestID: pair[0], ServerID: "server", Workflow: "test"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.MarkSubmitted(ctx, pair[0], pair[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	client, err := comfy.NewClientWithOptions(server.URL, comfy.ClientOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := engine.New(engine.Options{Config: &config.Config{ServerURL: server.URL}, Client: client, Jobs: store})
+	queued, err := service.Cancel(ctx, "queued-prompt")
+	if err != nil || queued.PreviousStatus != "queued" || queued.Status != "cancelling" || queued.Outcome != "request_sent" {
+		t.Fatalf("queued cancellation=%#v err=%v", queued, err)
+	}
+	running, err := service.Cancel(ctx, "running-prompt")
+	if err != nil || running.PreviousStatus != "running" || running.Status != "cancelling" || running.Outcome != "request_sent" {
+		t.Fatalf("running cancellation=%#v err=%v", running, err)
+	}
+	if queueDeletes.Load() != 1 || interrupts.Load() != 1 {
+		t.Fatalf("queue deletes=%d interrupts=%d", queueDeletes.Load(), interrupts.Load())
+	}
+}
+
 func TestConcurrentIdempotentSubmissionsReturnTheSameSubmittedJob(t *testing.T) {
 	t.Parallel()
 	entered := make(chan struct{})
@@ -177,6 +232,63 @@ func TestConcurrentIdempotentSubmissionsReturnTheSameSubmittedJob(t *testing.T) 
 	}
 	if first.created == second.created || submissions.Load() != 1 {
 		t.Fatalf("idempotency failed first=%#v second=%#v submissions=%d", first, second, submissions.Load())
+	}
+}
+
+func TestWatchReconnectsAfterPollingFallback(t *testing.T) {
+	t.Parallel()
+	var websocketAttempts atomic.Int32
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ws":
+			connection, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			defer connection.Close()
+			if websocketAttempts.Add(1) == 1 {
+				return
+			}
+			_ = connection.WriteJSON(map[string]any{"type": "executing", "data": map[string]any{"prompt_id": "prompt-reconnect", "node": nil}})
+		case "/history/prompt-reconnect":
+			_, _ = w.Write([]byte(`{}`))
+		case "/queue":
+			_, _ = w.Write([]byte(`{"queue_running":[[0,"prompt-reconnect"]],"queue_pending":[]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	store, err := jobs.Open(filepath.Join(t.TempDir(), "history.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, _, err := store.Reserve(ctx, jobs.Submission{RequestID: "request-reconnect", ServerID: "server", Workflow: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkSubmitted(ctx, "request-reconnect", "prompt-reconnect"); err != nil {
+		t.Fatal(err)
+	}
+	client, err := comfy.NewClientWithOptions(server.URL, comfy.ClientOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := engine.New(engine.Options{Config: &config.Config{ServerURL: server.URL}, Client: client, Jobs: store})
+	events, failures := service.Watch(ctx, "prompt-reconnect", time.Millisecond)
+	var received []comfy.Event
+	for event := range events {
+		received = append(received, event)
+	}
+	if err := <-failures; err != nil {
+		t.Fatal(err)
+	}
+	if websocketAttempts.Load() < 2 || len(received) == 0 || received[len(received)-1].Type != "completed" {
+		t.Fatalf("watch did not reconnect: attempts=%d events=%#v", websocketAttempts.Load(), received)
 	}
 }
 

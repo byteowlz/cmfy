@@ -84,6 +84,18 @@ func TestStoreRecoversDistinctJobsAfterRestart(t *testing.T) {
 	if page.Jobs[1].PromptID != "prompt-1" || page.Jobs[1].Prompt != "first prompt" || page.Jobs[1].Outputs[0].Filename != "first.png" {
 		t.Fatalf("unexpected completed job: %#v", page.Jobs[1])
 	}
+	firstPage, err := store.List(ctx, jobs.ListOptions{Limit: 1})
+	if err != nil || len(firstPage.Jobs) != 1 || firstPage.NextCursor == "" {
+		t.Fatalf("unexpected first page: %#v err=%v", firstPage, err)
+	}
+	secondPage, err := store.List(ctx, jobs.ListOptions{Limit: 1, Cursor: firstPage.NextCursor})
+	if err != nil || len(secondPage.Jobs) != 1 || secondPage.Jobs[0].PromptID != "prompt-1" {
+		t.Fatalf("unexpected second page: %#v err=%v", secondPage, err)
+	}
+	filtered, err := store.List(ctx, jobs.ListOptions{Limit: 10, Status: "completed", ServerID: "local"})
+	if err != nil || len(filtered.Jobs) != 1 || filtered.Jobs[0].Prompt != "first prompt" {
+		t.Fatalf("unexpected filtered page: %#v err=%v", filtered, err)
+	}
 }
 
 func TestStoreDeduplicatesRequestID(t *testing.T) {

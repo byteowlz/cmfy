@@ -17,6 +17,7 @@ func Descriptors(outputs map[string]any) ([]Descriptor, error) {
 	}
 	sort.Strings(nodeIDs)
 	result := make([]Descriptor, 0)
+	seen := make(map[string]struct{})
 	for _, nodeID := range nodeIDs {
 		node, ok := outputs[nodeID].(map[string]any)
 		if !ok {
@@ -42,6 +43,11 @@ func Descriptors(outputs map[string]any) ([]Descriptor, error) {
 				}
 				subfolder, _ := item["subfolder"].(string)
 				typeName, _ := item["type"].(string)
+				identity := filename + "\x00" + subfolder + "\x00" + typeName
+				if _, duplicate := seen[identity]; duplicate {
+					continue
+				}
+				seen[identity] = struct{}{}
 				result = append(result, Descriptor{
 					Filename:  filename,
 					Subfolder: subfolder,

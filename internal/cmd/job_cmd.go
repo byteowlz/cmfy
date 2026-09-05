@@ -237,21 +237,55 @@ func jobCancel(cmd *cobra.Command, args []string) error {
 	if err := selectServer(cfg, ""); err != nil {
 		return err
 	}
-	c, err := configuredClient(cfg)
+	client, err := configuredClient(cfg)
 	if err != nil {
 		return err
 	}
-	if err := c.DeleteFromQueueContext(cmd.Context(), []string{args[0]}); err != nil {
+	store, err := openJobStore()
+	if err != nil {
 		return err
 	}
-	if err := updateDurableStatus(cmd.Context(), args[0], "cancelled"); err != nil {
+	defer store.Close()
+	if _, err := store.Get(cmd.Context(), args[0]); err == nil {
+		service := engine.New(engine.Options{Config: cfg, Client: client, Jobs: store, OutputLimits: configuredOutputLimits(cfg)})
+		result, err := service.Cancel(cmd.Context(), args[0])
+		if err != nil {
+			return err
+		}
+		if machineJSON {
+			return emitJSON(result)
+		}
+		humanf("Cancellation %s for prompt %s (status: %s)\n", result.Outcome, result.PromptID, result.Status)
+		return nil
+	} else if !errors.Is(err, jobs.ErrNotFound) {
 		return err
 	}
-	result := map[string]any{"schema": "cmfy/cancel-v1", "prompt_id": args[0], "status": "cancelled"}
+	status, err := getPromptStatus(client, args[0])
+	if err != nil {
+		return err
+	}
+	outcome := "request_sent"
+	resultStatus := "cancelling"
+	switch status.Status {
+	case "running":
+		err = client.InterruptContext(cmd.Context())
+	case "pending", "queued":
+		err = client.DeleteFromQueueContext(cmd.Context(), []string{args[0]})
+	case "completed", "success", "failed", "error", "cancelled":
+		outcome = "already_terminal"
+		resultStatus = status.Status
+	default:
+		outcome = "not_found"
+		resultStatus = status.Status
+	}
+	if err != nil {
+		return err
+	}
+	result := map[string]any{"schema": "cmfy/cancellation-v1", "prompt_id": args[0], "previous_status": status.Status, "status": resultStatus, "outcome": outcome}
 	if machineJSON {
 		return emitJSON(result)
 	}
-	humanf("Cancel request sent for prompt: %s\n", args[0])
+	humanf("Cancellation %s for prompt %s (status: %s)\n", outcome, args[0], resultStatus)
 	return nil
 }
 

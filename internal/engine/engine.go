@@ -49,6 +49,14 @@ type Request struct {
 	OutputDir  string            `json:"output_dir,omitempty"`
 }
 
+type Cancellation struct {
+	Schema         string `json:"schema"`
+	PromptID       string `json:"prompt_id"`
+	PreviousStatus string `json:"previous_status"`
+	Status         string `json:"status"`
+	Outcome        string `json:"outcome"`
+}
+
 type ServerValidation struct {
 	Valid              bool     `json:"valid"`
 	MissingNodeClasses []string `json:"missing_node_classes"`
@@ -285,12 +293,61 @@ func (s *Service) Observe(ctx context.Context, id string) (jobs.Record, error) {
 	if statusErr != nil {
 		return jobs.Record{}, statusErr
 	}
+	if status == "not_found" {
+		if record.Status == "cancelling" {
+			status = "cancelled"
+		} else if time.Since(record.SubmittedAt) < 30*time.Second {
+			status = record.Status
+		}
+	}
 	if status != record.Status {
 		if err := s.jobs.Update(ctx, record.PromptID, jobs.Update{Status: status}); err != nil {
 			return jobs.Record{}, err
 		}
 	}
 	return s.jobs.Get(ctx, record.PromptID)
+}
+
+func (s *Service) Cancel(ctx context.Context, id string) (Cancellation, error) {
+	if s.client == nil || s.jobs == nil {
+		return Cancellation{}, errors.New("engine cancel requires client and job store")
+	}
+	record, err := s.jobs.Get(ctx, id)
+	if err != nil {
+		return Cancellation{}, err
+	}
+	if record.PromptID == "" {
+		return Cancellation{}, errors.New("job has no ComfyUI prompt ID")
+	}
+	status, err := s.remoteStatus(ctx, record.PromptID)
+	if err != nil {
+		return Cancellation{}, err
+	}
+	result := Cancellation{Schema: "cmfy/cancellation-v1", PromptID: record.PromptID, PreviousStatus: status, Status: status}
+	switch status {
+	case "completed", "success", "failed", "error", "cancelled":
+		result.Outcome = "already_terminal"
+		return result, nil
+	case "running":
+		if err := s.client.InterruptContext(ctx); err != nil {
+			return Cancellation{}, err
+		}
+	case "queued":
+		if err := s.client.DeleteFromQueueContext(ctx, []string{record.PromptID}); err != nil {
+			return Cancellation{}, err
+		}
+	case "not_found":
+		result.Outcome = "not_found"
+		return result, nil
+	default:
+		return Cancellation{}, fmt.Errorf("cannot cancel job in status %q", status)
+	}
+	if err := s.jobs.Update(ctx, record.PromptID, jobs.Update{Status: "cancelling"}); err != nil {
+		return Cancellation{}, err
+	}
+	result.Status = "cancelling"
+	result.Outcome = "request_sent"
+	return result, nil
 }
 
 func (s *Service) Collect(ctx context.Context, id string) (jobs.Record, error) {
@@ -353,35 +410,38 @@ func (s *Service) Watch(ctx context.Context, id string, interval time.Duration) 
 			failures <- errors.New("job has no ComfyUI prompt ID")
 			return
 		}
-		remoteEvents, remoteFailures := s.client.WatchContext(ctx, record.RequestID, record.PromptID)
-		for event := range remoteEvents {
-			status := eventStatus(event.Type)
-			if status != "" {
-				_ = s.jobs.Update(ctx, record.PromptID, jobs.Update{Status: status, Error: event.Message, UpdatedAt: event.Time})
-			}
-			select {
-			case events <- event:
-			case <-ctx.Done():
-				failures <- ctx.Err()
-				return
-			}
-			if terminalStatus(event.Type) {
-				failures <- nil
-				return
-			}
-		}
-		if err := <-remoteFailures; err == nil {
-			failures <- nil
-			return
-		}
 		if interval <= 0 {
 			interval = 1500 * time.Millisecond
 		}
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		lastStatus := ""
+		lastStatus := record.Status
 		for {
-			record, err := s.Observe(ctx, id)
+			remoteEvents, remoteFailures := s.client.WatchContext(ctx, record.RequestID, record.PromptID)
+			for event := range remoteEvents {
+				status := eventStatus(event.Type)
+				if status != "" && (status != lastStatus || event.Message != "") {
+					if err := s.jobs.Update(ctx, record.PromptID, jobs.Update{Status: status, Error: event.Message, UpdatedAt: event.Time}); err != nil {
+						failures <- err
+						return
+					}
+					lastStatus = status
+				}
+				select {
+				case events <- event:
+				case <-ctx.Done():
+					failures <- ctx.Err()
+					return
+				}
+				if terminalStatus(event.Type) {
+					failures <- nil
+					return
+				}
+			}
+			_ = <-remoteFailures
+			if ctx.Err() != nil {
+				failures <- ctx.Err()
+				return
+			}
+			record, err = s.Observe(ctx, id)
 			if err != nil {
 				failures <- err
 				return
@@ -404,7 +464,7 @@ func (s *Service) Watch(ctx context.Context, id string, interval time.Duration) 
 			case <-ctx.Done():
 				failures <- ctx.Err()
 				return
-			case <-ticker.C:
+			case <-time.After(interval):
 			}
 		}
 	}()
@@ -423,7 +483,7 @@ func (s *Service) Wait(ctx context.Context, id string, interval time.Duration) (
 			return jobs.Record{}, err
 		}
 		switch record.Status {
-		case "completed", "success", "cancelled", "failed", "error", "not_found":
+		case "completed", "success", "cancelled", "failed", "error":
 			return record, nil
 		}
 		select {
@@ -661,7 +721,7 @@ func eventStatus(eventType string) string {
 
 func terminalStatus(status string) bool {
 	switch status {
-	case "completed", "success", "failed", "error", "cancelled", "not_found":
+	case "completed", "success", "failed", "error", "cancelled":
 		return true
 	default:
 		return false

@@ -53,7 +53,7 @@ func TestWatchContextProducesBoundedPromptEvents(t *testing.T) {
 		defer connection.Close()
 		_ = connection.WriteJSON(map[string]any{"type": "progress", "data": map[string]any{"prompt_id": "other", "value": 1, "max": 2}})
 		_ = connection.WriteJSON(map[string]any{"type": "progress", "data": map[string]any{"prompt_id": "prompt-1", "node": "7", "value": 3, "max": 10}})
-		_ = connection.WriteMessage(websocket.BinaryMessage, []byte{1, 2, 3})
+		_ = connection.WriteMessage(websocket.BinaryMessage, []byte{0, 0, 0, 1, 0, 0, 0, 2, 1, 2, 3})
 		_ = connection.WriteJSON(map[string]any{"type": "executing", "data": map[string]any{"prompt_id": "prompt-1", "node": nil}})
 	}))
 	defer server.Close()
@@ -77,7 +77,7 @@ func TestWatchContextProducesBoundedPromptEvents(t *testing.T) {
 	if received[0].Type != "progress" || received[0].Value != 3 || received[0].Max != 10 || received[0].NodeID != "7" {
 		t.Fatalf("unexpected progress: %#v", received[0])
 	}
-	if received[1].Type != "preview" || received[1].ByteCount != 3 {
+	if received[1].Type != "preview" || received[1].ByteCount != 3 || received[1].PreviewMediaType != "image/png" || len(received[1].Preview) != 3 {
 		t.Fatalf("unexpected preview: %#v", received[1])
 	}
 	if received[2].Type != "completed" {

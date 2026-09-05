@@ -55,7 +55,7 @@ Representative schemas:
 
 `jobs watch --jsonl` emits one bounded `cmfy/job-event-v1` object per line. Types include `running`, `executing`, `progress`, `preview`, `node_completed`, `cached`, `completed`, `failed`, and `cancelled`. WebSocket events are filtered by prompt ID. If the WebSocket handshake or stream fails before a terminal event, watch reconciles through bounded polling.
 
-A preview event currently reports bounded preview availability and byte count; collected files remain the durable media surface.
+A preview event reports media type and byte count. `--include-preview` explicitly adds bounded base64 media to the JSONL event; without it, preview bytes are not written to logs. Collected files remain the durable media surface.
 
 Schema changes are additive within a version. Removing a field or changing meaning requires a new schema version. Consumers must ignore unknown fields and must never scrape human output.
 

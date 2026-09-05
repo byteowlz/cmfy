@@ -311,19 +311,33 @@ func workflowsAliases(cmd *cobra.Command, args []string) error {
 	for k := range cfg.StandardWorkflows {
 		seen[k] = true
 	}
+	aliases := make([]string, 0, len(seen))
 	for alias := range seen {
-		v := cfg.StandardWorkflows[alias]
-		if strings.TrimSpace(v) == "" {
-			v = ""
-		}
-		if v == "" {
+		aliases = append(aliases, alias)
+	}
+	sort.Strings(aliases)
+	results := make([]map[string]any, 0, len(aliases))
+	for _, alias := range aliases {
+		target := strings.TrimSpace(cfg.StandardWorkflows[alias])
+		implicit := false
+		if target == "" {
 			if _, _, err := workflow.Load(cfg.WorkflowsDir, alias); err == nil {
-				fmt.Printf("%s -> %s (implicit)\n", alias, alias)
-				continue
+				target = alias
+				implicit = true
 			}
-			fmt.Printf("%s -> <unset>\n", alias)
+		}
+		results = append(results, map[string]any{"alias": alias, "target": target, "implicit": implicit})
+	}
+	if machineJSON {
+		return emitJSON(results)
+	}
+	for _, result := range results {
+		if result["target"] == "" {
+			humanf("%s -> <unset>\n", result["alias"])
+		} else if result["implicit"] == true {
+			humanf("%s -> %s (implicit)\n", result["alias"], result["target"])
 		} else {
-			fmt.Printf("%s -> %s\n", alias, v)
+			humanf("%s -> %s\n", result["alias"], result["target"])
 		}
 	}
 	return nil
@@ -343,7 +357,10 @@ func workflowsAssign(cmd *cobra.Command, args []string) error {
 	if err := config.Save(cfg); err != nil {
 		return err
 	}
-	fmt.Printf("Assigned %s -> %s\n", alias, wf)
+	if machineJSON {
+		return emitJSON(map[string]any{"schema": "cmfy/workflow-alias-v1", "alias": alias, "target": wf})
+	}
+	humanf("Assigned %s -> %s\n", alias, wf)
 	return nil
 }
 

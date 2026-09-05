@@ -2,6 +2,7 @@ package comfy
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,15 +13,18 @@ import (
 )
 
 type Event struct {
-	Schema    string    `json:"schema"`
-	Type      string    `json:"type"`
-	PromptID  string    `json:"prompt_id,omitempty"`
-	NodeID    string    `json:"node_id,omitempty"`
-	Value     int       `json:"value,omitempty"`
-	Max       int       `json:"max,omitempty"`
-	ByteCount int       `json:"byte_count,omitempty"`
-	Message   string    `json:"message,omitempty"`
-	Time      time.Time `json:"time"`
+	Schema           string    `json:"schema"`
+	Type             string    `json:"type"`
+	PromptID         string    `json:"prompt_id,omitempty"`
+	NodeID           string    `json:"node_id,omitempty"`
+	Value            int       `json:"value,omitempty"`
+	Max              int       `json:"max,omitempty"`
+	ByteCount        int       `json:"byte_count,omitempty"`
+	PreviewMediaType string    `json:"preview_media_type,omitempty"`
+	PreviewBase64    string    `json:"preview_base64,omitempty"`
+	Preview          []byte    `json:"-"`
+	Message          string    `json:"message,omitempty"`
+	Time             time.Time `json:"time"`
 }
 
 func (c *Client) WatchContext(ctx context.Context, clientID, promptID string) (<-chan Event, <-chan error) {
@@ -97,7 +101,19 @@ func (c *Client) WatchContext(ctx context.Context, clientID, promptID string) (<
 func decodeEvent(messageType int, body []byte, promptID string) (Event, bool, bool, error) {
 	now := time.Now().UTC()
 	if messageType == websocket.BinaryMessage {
-		return Event{Schema: "cmfy/job-event-v1", Type: "preview", PromptID: promptID, ByteCount: len(body), Time: now}, true, false, nil
+		mediaType := "application/octet-stream"
+		payload := body
+		if len(body) >= 8 {
+			payload = body[8:]
+			switch binary.BigEndian.Uint32(body[4:8]) {
+			case 1:
+				mediaType = "image/jpeg"
+			case 2:
+				mediaType = "image/png"
+			}
+		}
+		preview := append([]byte(nil), payload...)
+		return Event{Schema: "cmfy/job-event-v1", Type: "preview", PromptID: promptID, ByteCount: len(preview), PreviewMediaType: mediaType, Preview: preview, Time: now}, true, false, nil
 	}
 	if messageType != websocket.TextMessage {
 		return Event{}, false, false, nil

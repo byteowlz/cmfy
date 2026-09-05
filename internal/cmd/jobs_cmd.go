@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"time"
@@ -14,17 +15,18 @@ import (
 )
 
 var (
-	jobsLimit       int
-	jobsCursor      string
-	jobsStatus      string
-	jobsServer      string
-	watchJSONL      bool
-	watchInterval   time.Duration
-	retryRequestID  string
-	pruneOlderThan  time.Duration
-	pruneUploadsAge time.Duration
-	pruneKeepRecent int
-	pruneDryRun     bool
+	jobsLimit           int
+	jobsCursor          string
+	jobsStatus          string
+	jobsServer          string
+	watchJSONL          bool
+	watchIncludePreview bool
+	watchInterval       time.Duration
+	retryRequestID      string
+	pruneOlderThan      time.Duration
+	pruneUploadsAge     time.Duration
+	pruneKeepRecent     int
+	pruneDryRun         bool
 )
 
 var jobsCmd = &cobra.Command{
@@ -40,9 +42,16 @@ var jobsListCmd = &cobra.Command{
 
 var jobsShowCmd = &cobra.Command{
 	Use:   "show <job_or_prompt_id>",
-	Short: "Show one durable job",
+	Short: "Show one durable job without network reconciliation",
 	Args:  cobra.ExactArgs(1),
 	RunE:  showJob,
+}
+
+var jobsStatusCmd = &cobra.Command{
+	Use:   "status <job_or_prompt_id>",
+	Short: "Reconcile one durable job with ComfyUI",
+	Args:  cobra.ExactArgs(1),
+	RunE:  statusJob,
 }
 
 var jobsWatchCmd = &cobra.Command{
@@ -67,12 +76,13 @@ var jobsPruneCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(jobsCmd)
-	jobsCmd.AddCommand(jobsListCmd, jobsShowCmd, jobsWatchCmd, jobsRetryCmd, jobsPruneCmd)
+	jobsCmd.AddCommand(jobsListCmd, jobsShowCmd, jobsStatusCmd, jobsWatchCmd, jobsRetryCmd, jobsPruneCmd)
 	jobsListCmd.Flags().IntVar(&jobsLimit, "limit", 50, "Maximum jobs to return (1-200)")
 	jobsListCmd.Flags().StringVar(&jobsCursor, "cursor", "", "Opaque continuation cursor")
 	jobsListCmd.Flags().StringVar(&jobsStatus, "status", "", "Filter by exact status")
 	jobsListCmd.Flags().StringVar(&jobsServer, "server-id", "", "Filter by stable server identity")
 	jobsWatchCmd.Flags().BoolVar(&watchJSONL, "jsonl", false, "Emit one JSON event per line")
+	jobsWatchCmd.Flags().BoolVar(&watchIncludePreview, "include-preview", false, "Include bounded preview media as base64 in JSONL events")
 	jobsWatchCmd.Flags().DurationVar(&watchInterval, "interval", 1500*time.Millisecond, "Polling fallback interval")
 	jobsRetryCmd.Flags().StringVar(&retryRequestID, "request-id", "", "Idempotency key for the retried submission")
 	jobsPruneCmd.Flags().DurationVar(&pruneOlderThan, "older-than", 30*24*time.Hour, "Prune terminal jobs older than this age")
@@ -120,7 +130,42 @@ func showJob(_ *cobra.Command, args []string) error {
 	return nil
 }
 
+func statusJob(command *cobra.Command, args []string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if err := selectServer(cfg, ""); err != nil {
+		return err
+	}
+	store, err := openJobStore()
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	client, err := configuredClient(cfg)
+	if err != nil {
+		return err
+	}
+	service := engine.New(engine.Options{Config: cfg, Client: client, Jobs: store, OutputLimits: configuredOutputLimits(cfg)})
+	job, err := service.Observe(command.Context(), args[0])
+	if err != nil {
+		return err
+	}
+	if machineJSON {
+		return emitJSON(job)
+	}
+	humanf("Prompt ID: %s\nStatus: %s\n", job.PromptID, job.Status)
+	return nil
+}
+
 func watchJob(command *cobra.Command, args []string) error {
+	if machineJSON {
+		return errors.New("jobs watch is streaming; use --jsonl instead of global --json")
+	}
+	if watchIncludePreview && !watchJSONL {
+		return errors.New("--include-preview requires --jsonl")
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -140,7 +185,10 @@ func watchJob(command *cobra.Command, args []string) error {
 	service := engine.New(engine.Options{Config: cfg, Client: client, Jobs: store, OutputLimits: configuredOutputLimits(cfg)})
 	events, failures := service.Watch(command.Context(), args[0], watchInterval)
 	for event := range events {
-		if machineJSON || watchJSONL {
+		if watchJSONL {
+			if watchIncludePreview && len(event.Preview) > 0 {
+				event.PreviewBase64 = base64.StdEncoding.EncodeToString(event.Preview)
+			}
 			if err := emitJSON(event); err != nil {
 				return err
 			}
@@ -279,13 +327,4 @@ func requestFromRecord(record jobs.Record) (engine.Request, error) {
 		}
 	}
 	return request, nil
-}
-
-func terminalStatus(status string) bool {
-	switch status {
-	case "completed", "success", "failed", "error", "cancelled", "not_found":
-		return true
-	default:
-		return false
-	}
 }

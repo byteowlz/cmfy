@@ -284,6 +284,14 @@ func (c *Client) QueueContext(ctx context.Context) (map[string]interface{}, erro
 	return result, nil
 }
 
+func (c *Client) InterruptContext(ctx context.Context) error {
+	response, err := c.doJSON(ctx, http.MethodPost, "/interrupt", []byte(`{}`), "interrupt")
+	if err != nil {
+		return err
+	}
+	return response.Body.Close()
+}
+
 func (c *Client) DeleteFromQueue(promptIDs []string) error {
 	return c.DeleteFromQueueContext(context.Background(), promptIDs)
 }

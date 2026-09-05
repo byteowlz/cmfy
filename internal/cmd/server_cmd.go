@@ -88,11 +88,13 @@ func serverInspect(command *cobra.Command, _ []string) error {
 	folders, modelErr := client.ModelFoldersContext(ctx)
 	if modelErr != nil {
 		warnings = append(warnings, "model inventory unavailable: "+modelErr.Error())
-	} else if len(folders) > 64 {
-		warnings = append(warnings, "model folder count exceeds limit 64")
+	} else if len(folders) > 128 {
+		warnings = append(warnings, "model folder count exceeds limit 128")
 	} else {
 		capabilities["models"] = true
 		sort.Strings(folders)
+		modelCount := 0
+		modelBytes := 0
 		for _, folder := range folders {
 			models, err := client.ModelsContext(ctx, folder)
 			if err != nil {
@@ -100,6 +102,16 @@ func serverInspect(command *cobra.Command, _ []string) error {
 				continue
 			}
 			sort.Strings(models)
+			for _, model := range models {
+				modelCount++
+				modelBytes += len(model)
+			}
+			if modelCount > 100_000 || modelBytes > 8<<20 {
+				warnings = append(warnings, "aggregate model inventory exceeds bounded output limit")
+				capabilities["models"] = false
+				modelInventory = map[string][]string{}
+				break
+			}
 			modelInventory[folder] = models
 		}
 	}

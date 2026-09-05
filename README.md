@@ -311,6 +311,7 @@ Job state defaults to `$CMFY_STATE_DIR/history.sqlite3`, then `$XDG_STATE_HOME/c
 ./cmfy --json jobs list --limit 50 --status completed
 ./cmfy --json jobs show <job-or-prompt-id>
 ./cmfy jobs watch --jsonl <job-or-prompt-id>  # WebSocket, polling fallback
+./cmfy jobs watch --jsonl --include-preview <id>  # bounded base64 previews
 ./cmfy --json jobs retry <job-or-prompt-id> --request-id retry-001
 ./cmfy jobs prune --older-than 720h --keep-recent 1000 --dry-run
 
@@ -334,7 +335,7 @@ Schemas are versioned by their `schema` field. Additive fields may appear within
 
 ## API Endpoints Used
 
-- `POST /upload` — uploads files (form-data) as type `input`.
+- `POST /upload/image` — streams bounded form-data files as type `input`.
 - `POST /prompt` — submits a prompt graph, returns `prompt_id`.
 - `GET  /history/<prompt_id>` — tracks prompt execution and outputs.
 - `GET  /queue` — queue state for running/pending prompts.

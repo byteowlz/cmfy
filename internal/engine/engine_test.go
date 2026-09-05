@@ -3,6 +3,7 @@ package engine_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"cmfy/internal/config"
 	"cmfy/internal/engine"
 	"cmfy/internal/jobs"
+	"cmfy/internal/workflow"
 
 	"github.com/gorilla/websocket"
 )
@@ -116,6 +118,81 @@ func TestResolveSubmitObserveCollectUsesOneDurableSubstrate(t *testing.T) {
 	}
 	if body, err := os.ReadFile(filepath.Join(root, "outputs", "result.png")); err != nil || string(body) != "image bytes" {
 		t.Fatalf("materialized output body=%q err=%v", body, err)
+	}
+}
+
+func TestValidateServerReportsMissingNodeClasses(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"SaveImage":{}}`))
+	}))
+	defer server.Close()
+	client, err := comfy.NewClientWithOptions(server.URL, comfy.ClientOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := engine.New(engine.Options{Client: client})
+	validation, err := service.ValidateServer(context.Background(), engine.Plan{Contract: workflow.Contract{NodeClasses: []string{"KSampler", "SaveImage"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if validation.Valid || len(validation.MissingNodeClasses) != 1 || validation.MissingNodeClasses[0] != "KSampler" {
+		t.Fatalf("unexpected server validation: %#v", validation)
+	}
+}
+
+func TestUploadCacheReusesOnlyProbedContentOnTheSameServer(t *testing.T) {
+	t.Parallel()
+	var uploads atomic.Int32
+	var prompts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/upload/image":
+			uploads.Add(1)
+			_, _ = w.Write([]byte(`{"name":"cached-input.png"}`))
+		case "/view":
+			if r.URL.Query().Get("filename") != "cached-input.png" || r.URL.Query().Get("type") != "input" {
+				t.Errorf("unexpected probe query: %s", r.URL.RawQuery)
+			}
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write([]byte("x"))
+		case "/prompt":
+			id := prompts.Add(1)
+			fmt.Fprintf(w, `{"prompt_id":"prompt-%d"}`, id)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "input.png"), []byte("same-input"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "img.json"), []byte(`{"1":{"class_type":"LoadImage","inputs":{"image":"${IMAGE}"}},"9":{"class_type":"SaveImage","inputs":{"images":["1",0]}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := jobs.Open(filepath.Join(root, "history.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	client, err := comfy.NewClientWithOptions(server.URL, comfy.ClientOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{ServerURL: server.URL, WorkflowsDir: root, OutputDir: filepath.Join(root, "out"), MaxUploadBytes: 1024, Vars: map[string]string{}, WorkflowVars: map[string]map[string]string{}, StandardWorkflows: map[string]string{}, StandardWorkflowParams: map[string]map[string]string{}}
+	service := engine.New(engine.Options{Config: cfg, Client: client, Jobs: store})
+	for _, requestID := range []string{"first", "second"} {
+		plan, err := service.Resolve(context.Background(), engine.Request{RequestID: requestID, Workflow: "img", Images: []string{filepath.Join(root, "input.png")}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := service.Submit(context.Background(), plan); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if uploads.Load() != 1 || prompts.Load() != 2 {
+		t.Fatalf("uploads=%d prompts=%d", uploads.Load(), prompts.Load())
 	}
 }
 

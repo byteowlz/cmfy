@@ -13,14 +13,22 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestMachineCLIContracts(t *testing.T) {
 	var promptCounter atomic.Int64
+	var activePrompts atomic.Int64
+	var maxActivePrompts atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.URL.Path == "/prompt":
+			active := activePrompts.Add(1)
+			for active > maxActivePrompts.Load() && !maxActivePrompts.CompareAndSwap(maxActivePrompts.Load(), active) {
+			}
+			time.Sleep(40 * time.Millisecond)
+			activePrompts.Add(-1)
 			id := promptCounter.Add(1)
 			fmt.Fprintf(w, `{"prompt_id":"prompt-%d"}`, id)
 		case r.URL.Path == "/object_info":
@@ -29,8 +37,12 @@ func TestMachineCLIContracts(t *testing.T) {
 			_, _ = w.Write([]byte(`{"queue_running":[],"queue_pending":[[0,"prompt-1"]]}`))
 		case r.URL.Path == "/queue" && r.Method == http.MethodPost:
 			_, _ = w.Write([]byte(`{}`))
+		case r.URL.Path == "/history/prompt-2":
+			_, _ = w.Write([]byte(`{"prompt-2":{"status":{"completed":true},"outputs":{"9":{"images":[{"filename":"result.png","subfolder":"","type":"output"}]}}}}`))
 		case strings.HasPrefix(r.URL.Path, "/history/"):
 			_, _ = w.Write([]byte(`{}`))
+		case r.URL.Path == "/view":
+			_, _ = w.Write([]byte("image bytes"))
 		case r.URL.Path == "/system_stats":
 			_, _ = w.Write([]byte(`{"system":{"os":"test"}}`))
 		case r.URL.Path == "/models":
@@ -99,6 +111,14 @@ func TestMachineCLIContracts(t *testing.T) {
 	if status := runJSON("jobs", "status", "prompt-1"); status["status"] != "queued" {
 		t.Fatalf("unexpected reconciled job: %#v", status)
 	}
+	completedSubmission := runJSON("run", "--async", "--request-id", "request-completed", "--workflow", "test", "--prompt", "collect me")
+	if completedSubmission["prompt_id"] != "prompt-2" {
+		t.Fatalf("unexpected completed submission: %#v", completedSubmission)
+	}
+	collected := runJSON("job", "wait", "--download", "--output-dir", filepath.Join(root, "collected"), "prompt-2")
+	if collected["status"] != "completed" || len(collected["outputs"].([]any)) != 1 {
+		t.Fatalf("unexpected wait/collect result: %#v", collected)
+	}
 	if plan := runJSON("run", "--plan", "--workflow", "test", "--prompt", "plan"); plan["schema"] != "cmfy/execution-plan-v1" || !plan["server_validation"].(map[string]any)["valid"].(bool) {
 		t.Fatalf("unexpected plan: %#v", plan)
 	}
@@ -123,12 +143,17 @@ func TestMachineCLIContracts(t *testing.T) {
 		runJSON(arguments...)
 	}
 	batchPath := filepath.Join(root, "batch.jsonl")
-	if err := os.WriteFile(batchPath, []byte(`{"id":"batch-1","workflow":"test","vars":{"PROMPT":"batch prompt"},"async":true}`+"\n"), 0o600); err != nil {
+	batchBody := `{"id":"batch-1","workflow":"test","vars":{"PROMPT":"batch one"},"async":true}` + "\n" +
+		`{"id":"batch-2","workflow":"test","vars":{"PROMPT":"batch two"},"async":true}` + "\n"
+	if err := os.WriteFile(batchPath, []byte(batchBody), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	batch := runJSON("batch", "run", "--file", batchPath, "--concurrency", "2")
-	if rows, ok := batch["array"].([]any); !ok || len(rows) != 1 {
+	if rows, ok := batch["array"].([]any); !ok || len(rows) != 2 {
 		t.Fatalf("unexpected batch result: %#v", batch)
+	}
+	if maxActivePrompts.Load() < 2 {
+		t.Fatalf("batch did not honor concurrency: max active prompts=%d", maxActivePrompts.Load())
 	}
 
 	failure := exec.Command(binary, "--config", configPath, "--state-dir", stateDir, "--json", "workflows", "describe", "missing")

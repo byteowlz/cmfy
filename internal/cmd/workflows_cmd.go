@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -14,7 +15,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var workflowsInspectShowGuidelines bool
+var (
+	workflowsInspectShowGuidelines bool
+	workflowContractVars           []string
+)
 
 var workflowsCmd = &cobra.Command{
 	Use:   "workflows",
@@ -39,6 +43,20 @@ var workflowsInspectCmd = &cobra.Command{
 	Short: "Inspect workflow nodes and inputs",
 	Args:  cobra.ExactArgs(1),
 	RunE:  workflowsInspect,
+}
+
+var workflowsDescribeCmd = &cobra.Command{
+	Use:   "describe <name>",
+	Short: "Describe the deterministic workflow contract",
+	Args:  cobra.ExactArgs(1),
+	RunE:  workflowsDescribe,
+}
+
+var workflowsValidateCmd = &cobra.Command{
+	Use:   "validate <name>",
+	Short: "Validate required variables and connected outputs",
+	Args:  cobra.ExactArgs(1),
+	RunE:  workflowsValidate,
 }
 
 var workflowsAliasesCmd = &cobra.Command{
@@ -66,10 +84,13 @@ func init() {
 	workflowsCmd.AddCommand(workflowsListCmd)
 	workflowsCmd.AddCommand(workflowsShowCmd)
 	workflowsCmd.AddCommand(workflowsInspectCmd)
+	workflowsCmd.AddCommand(workflowsDescribeCmd)
+	workflowsCmd.AddCommand(workflowsValidateCmd)
 	workflowsCmd.AddCommand(workflowsAliasesCmd)
 	workflowsCmd.AddCommand(workflowsAssignCmd)
 	workflowsCmd.AddCommand(workflowsAddCmd)
 	workflowsInspectCmd.Flags().BoolVar(&workflowsInspectShowGuidelines, "guidelines", false, "Show optional prompt guidelines for this workflow")
+	workflowsValidateCmd.Flags().StringArrayVar(&workflowContractVars, "var", nil, "Declare KEY=VALUE as available during validation")
 }
 
 func workflowsList(cmd *cobra.Command, args []string) error {
@@ -81,12 +102,15 @@ func workflowsList(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	if machineJSON {
+		return emitJSON(items)
+	}
 	if len(items) == 0 {
-		fmt.Println("No workflows found in", cfg.WorkflowsDir)
+		humanf("No workflows found in %s\n", cfg.WorkflowsDir)
 		return nil
 	}
 	for _, n := range items {
-		fmt.Println(n)
+		humanf("%s\n", n)
 	}
 	return nil
 }
@@ -104,8 +128,11 @@ func workflowsShow(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	out := map[string]any{"prompt": p}
-	b, _ := json.MarshalIndent(out, "", "  ")
+	out := map[string]any{"path": resolved, "prompt": p}
+	if machineJSON {
+		return emitJSON(out)
+	}
+	b, _ := json.MarshalIndent(map[string]any{"prompt": p}, "", "  ")
 	fmt.Printf("# %s\n%s\n", resolved, string(b))
 	return nil
 }
@@ -124,6 +151,13 @@ func workflowsInspect(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	infos, _ := workflow.Inspect(pr)
+	if machineJSON {
+		contract, err := workflow.Describe(pr, vars)
+		if err != nil {
+			return err
+		}
+		return emitJSON(map[string]any{"path": resolved, "contract": contract, "nodes": infos})
+	}
 	fmt.Printf("# %s\n", resolved)
 
 	if workflowsInspectShowGuidelines {
@@ -165,6 +199,77 @@ func workflowsInspect(cmd *cobra.Command, args []string) error {
 		}
 	}
 	return nil
+}
+
+func workflowsDescribe(_ *cobra.Command, args []string) error {
+	prompt, resolved, variables, err := loadWorkflowForContract(args[0])
+	if err != nil {
+		return err
+	}
+	contract, err := workflow.Describe(prompt, variables)
+	if err != nil {
+		return err
+	}
+	result := map[string]any{"schema": "cmfy/workflow-description-v1", "path": resolved, "contract": contract}
+	if machineJSON {
+		return emitJSON(result)
+	}
+	return emitJSON(result)
+}
+
+func workflowsValidate(_ *cobra.Command, args []string) error {
+	prompt, resolved, defaults, err := loadWorkflowForContract(args[0])
+	if err != nil {
+		return err
+	}
+	values := map[string]string{}
+	for name, metadata := range defaults {
+		if metadata.Default != "" {
+			values[name] = metadata.Default
+		}
+	}
+	for _, pair := range workflowContractVars {
+		key, value, ok := splitKV(pair)
+		if !ok {
+			return fmt.Errorf("--var expects KEY=VALUE, got %q", pair)
+		}
+		values[key] = value
+	}
+	validation, err := workflow.Validate(prompt, values)
+	if err != nil {
+		return err
+	}
+	result := map[string]any{"schema": "cmfy/workflow-validation-v1", "path": resolved, "validation": validation}
+	if err := emitJSON(result); err != nil {
+		return err
+	}
+	if !validation.Valid {
+		err := errors.New("workflow validation failed")
+		if machineJSON {
+			return Reported(err)
+		}
+		return err
+	}
+	return nil
+}
+
+func loadWorkflowForContract(name string) (map[string]any, string, map[string]workflow.VariableMetadata, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, "", nil, err
+	}
+	if resolved, ok := resolveAliasMaybe(name); ok {
+		name = resolved
+	}
+	prompt, path, variables, err := workflow.LoadWithVars(cfg.WorkflowsDir, name)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	delete(prompt, "#variables")
+	delete(prompt, "variables")
+	delete(prompt, "prompt_guidelines")
+	delete(prompt, "guidelines")
+	return prompt, path, variables, nil
 }
 
 func printPromptGuidelines(pg *workflow.PromptGuidelines) {

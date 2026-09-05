@@ -79,6 +79,9 @@ func TestCollectBoundsAndAtomicallyMaterializesOutputs(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "images", "result.png")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("oversized final file exists: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(root, "images", ".result.png.cmfy-part")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("oversized partial file remains: %v", err)
+	}
 
 	_, err = output.Collect(ctx, memorySource{data: []byte("content"), interrupt: true}, root, []output.Descriptor{descriptor}, output.Limits{MaxFileBytes: 1024, MaxTotalBytes: 1024})
 	if err == nil || !strings.Contains(err.Error(), "interrupted") {
@@ -98,6 +101,32 @@ func TestCollectBoundsAndAtomicallyMaterializesOutputs(t *testing.T) {
 	body, err := os.ReadFile(filepath.Join(root, assets[0].Path))
 	if err != nil || string(body) != "content" {
 		t.Fatalf("unexpected materialized body %q err=%v", body, err)
+	}
+}
+
+func TestCollectResumesPartialDownloads(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	root := t.TempDir()
+	descriptor := output.Descriptor{Filename: "resume.png"}
+	if _, err := output.Collect(ctx, memorySource{data: []byte("abcdef"), interrupt: true}, root, []output.Descriptor{descriptor}, output.Limits{MaxFileBytes: 64, MaxTotalBytes: 64}); err == nil {
+		t.Fatal("expected interrupted first download")
+	}
+	assets, err := output.Collect(ctx, memorySource{data: []byte("abcdef"), partial: true}, root, []output.Descriptor{descriptor}, output.Limits{MaxFileBytes: 64, MaxTotalBytes: 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(root, assets[0].Path))
+	if err != nil || string(body) != "abcdef" {
+		t.Fatalf("unexpected resumed body %q err=%v", body, err)
+	}
+}
+
+func TestCollectBoundsOutputCount(t *testing.T) {
+	t.Parallel()
+	descriptors := []output.Descriptor{{Filename: "one.png"}, {Filename: "two.png"}}
+	if _, err := output.Collect(context.Background(), memorySource{data: []byte("x")}, t.TempDir(), descriptors, output.Limits{MaxFiles: 1}); err == nil || !strings.Contains(err.Error(), "output count") {
+		t.Fatalf("expected output count error, got %v", err)
 	}
 }
 

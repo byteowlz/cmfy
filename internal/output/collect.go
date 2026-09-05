@@ -18,6 +18,8 @@ const (
 	defaultMaxTotalBytes = int64(1 << 30)
 )
 
+var ErrByteLimit = errors.New("output exceeds byte limit")
+
 type Descriptor struct {
 	Filename  string `json:"filename"`
 	Subfolder string `json:"subfolder,omitempty"`
@@ -37,6 +39,7 @@ type Source interface {
 type Limits struct {
 	MaxFileBytes  int64
 	MaxTotalBytes int64
+	MaxFiles      int
 }
 
 type Asset struct {
@@ -59,6 +62,12 @@ func Collect(ctx context.Context, source Source, root string, descriptors []Desc
 	}
 	if limits.MaxTotalBytes <= 0 {
 		limits.MaxTotalBytes = defaultMaxTotalBytes
+	}
+	if limits.MaxFiles <= 0 {
+		limits.MaxFiles = 256
+	}
+	if len(descriptors) > limits.MaxFiles {
+		return nil, fmt.Errorf("output count %d exceeds limit %d", len(descriptors), limits.MaxFiles)
 	}
 	assets := make([]Asset, 0, len(descriptors))
 	var total int64
@@ -156,9 +165,17 @@ func collectOne(ctx context.Context, source Source, root string, descriptor Desc
 	}
 	allowed := minInt64(maxFile, remaining)
 	written, copyErr := copyBounded(file, body, allowed-offset)
+	syncErr := file.Sync()
 	closeErr := file.Close()
 	if copyErr != nil {
+		if errors.Is(copyErr, ErrByteLimit) {
+			_ = os.Remove(partial)
+			_ = syncDirectory(directory)
+		}
 		return Asset{}, fmt.Errorf("download output %q: %w", descriptor.Filename, copyErr)
+	}
+	if syncErr != nil {
+		return Asset{}, fmt.Errorf("sync output %q: %w", descriptor.Filename, syncErr)
 	}
 	if closeErr != nil {
 		return Asset{}, fmt.Errorf("close output %q: %w", descriptor.Filename, closeErr)
@@ -180,12 +197,21 @@ func collectOne(ctx context.Context, source Source, root string, descriptor Desc
 		if err := os.Remove(partial); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return Asset{}, fmt.Errorf("remove duplicate partial output: %w", err)
 		}
-	} else {
-		if err := os.Rename(partial, finalTarget); err != nil {
-			return Asset{}, fmt.Errorf("publish output %q: %w", descriptor.Filename, err)
+		if err := syncDirectory(directory); err != nil {
+			return Asset{}, err
 		}
-		if err := os.Chmod(finalTarget, 0o644); err != nil {
+	} else {
+		if err := os.Chmod(partial, 0o644); err != nil {
 			return Asset{}, fmt.Errorf("set output permissions: %w", err)
+		}
+		if err := os.Link(partial, finalTarget); err != nil {
+			return Asset{}, fmt.Errorf("atomically publish output %q without overwriting: %w", descriptor.Filename, err)
+		}
+		if err := os.Remove(partial); err != nil {
+			return Asset{}, fmt.Errorf("remove published partial output: %w", err)
+		}
+		if err := syncDirectory(directory); err != nil {
+			return Asset{}, err
 		}
 	}
 	finalRelative, err := filepath.Rel(root, finalTarget)
@@ -238,7 +264,7 @@ func rejectSymlink(path string) error {
 
 func copyBounded(destination io.Writer, source io.Reader, remaining int64) (int64, error) {
 	if remaining < 0 {
-		return 0, errors.New("output exceeds byte limit")
+		return 0, ErrByteLimit
 	}
 	limited := io.LimitReader(source, remaining+1)
 	written, err := io.Copy(destination, limited)
@@ -246,7 +272,7 @@ func copyBounded(destination io.Writer, source io.Reader, remaining int64) (int6
 		return written, err
 	}
 	if written > remaining {
-		return written, errors.New("output exceeds byte limit")
+		return written, ErrByteLimit
 	}
 	return written, nil
 }
@@ -293,6 +319,18 @@ func collisionTarget(target, digest string) (string, bool, error) {
 		return candidate, true, nil
 	}
 	return "", false, fmt.Errorf("deterministic collision target %q already contains different data", candidate)
+}
+
+func syncDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open output directory for sync: %w", err)
+	}
+	defer directory.Close()
+	if err := directory.Sync(); err != nil {
+		return fmt.Errorf("sync output directory: %w", err)
+	}
+	return nil
 }
 
 func minInt64(a, b int64) int64 {

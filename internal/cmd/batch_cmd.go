@@ -3,13 +3,17 @@ package cmd
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"time"
+
+	"cmfy/internal/jobs"
 
 	"github.com/spf13/cobra"
 )
@@ -27,6 +31,11 @@ type batchJob struct {
 	Timeout  string            `json:"timeout,omitempty"`
 }
 
+type batchItem struct {
+	line int
+	job  batchJob
+}
+
 type batchResult struct {
 	Line     int    `json:"line"`
 	ID       string `json:"id,omitempty"`
@@ -38,268 +47,285 @@ type batchResult struct {
 
 var (
 	batchFile        string
-	batchJSON        bool
 	batchStopOnError bool
 	batchAsync       bool
 	batchSubmitDelay time.Duration
+	batchConcurrency int
 	batchExampleMode string
 )
 
-var batchCmd = &cobra.Command{
-	Use:   "batch",
-	Short: "Run multiple jobs from JSONL",
-}
-
-var batchRunCmd = &cobra.Command{
-	Use:   "run",
-	Short: "Submit jobs from a JSONL file",
-	RunE:  runBatch,
-}
-
-var batchRunExampleCmd = &cobra.Command{
-	Use:   "example",
-	Short: "Print JSONL batch examples to stdout",
-	RunE:  runBatchExample,
-}
+var batchCmd = &cobra.Command{Use: "batch", Short: "Run multiple jobs from JSONL"}
+var batchRunCmd = &cobra.Command{Use: "run", Short: "Submit jobs from a JSONL file", RunE: runBatch}
+var batchRunExampleCmd = &cobra.Command{Use: "example", Short: "Print JSONL batch examples to stdout", RunE: runBatchExample}
 
 func init() {
 	rootCmd.AddCommand(batchCmd)
 	batchCmd.AddCommand(batchRunCmd)
 	batchRunCmd.AddCommand(batchRunExampleCmd)
-
 	batchRunCmd.Flags().StringVarP(&batchFile, "file", "f", "", "Path to JSONL batch file")
-	batchRunCmd.Flags().BoolVar(&batchJSON, "json", false, "Output machine-readable job results")
-	batchRunCmd.Flags().BoolVar(&batchStopOnError, "stop-on-error", false, "Stop after first failed job")
-	batchRunCmd.Flags().BoolVar(&batchAsync, "async", false, "Default to async submission for all jobs (line-level async still overrides)")
-	batchRunCmd.Flags().DurationVar(&batchSubmitDelay, "submit-delay", 0, "Delay between submissions (throttling only; not execution concurrency)")
-
+	batchRunCmd.Flags().BoolVar(&batchStopOnError, "stop-on-error", false, "Stop scheduling after the first failed job")
+	batchRunCmd.Flags().BoolVar(&batchAsync, "async", false, "Default to async submission for all jobs")
+	batchRunCmd.Flags().DurationVar(&batchSubmitDelay, "submit-delay", 0, "Minimum delay between submission starts")
+	batchRunCmd.Flags().IntVar(&batchConcurrency, "concurrency", 1, "Maximum concurrent jobs (1-32)")
 	batchRunExampleCmd.Flags().StringVar(&batchExampleMode, "mode", "mixed-workflows", "Example mode: minimal|full|mixed-workflows")
 }
 
-func runBatch(cmd *cobra.Command, args []string) error {
+func runBatch(command *cobra.Command, _ []string) error {
 	if strings.TrimSpace(batchFile) == "" {
-		return fmt.Errorf("--file is required")
+		return errorsNew("--file is required")
 	}
-	f, err := os.Open(batchFile)
+	items, invalid, err := readBatch(batchFile)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-
-	exe, err := os.Executable()
+	if batchConcurrency < 1 || batchConcurrency > 32 {
+		return fmt.Errorf("--concurrency must be between 1 and 32")
+	}
+	executable, err := os.Executable()
 	if err != nil {
 		return err
 	}
-
-	scanner := bufio.NewScanner(f)
-	buf := make([]byte, 0, 1024*1024)
-	scanner.Buffer(buf, 10*1024*1024)
-
-	results := make([]batchResult, 0, 16)
-	lineNo := 0
-	for scanner.Scan() {
-		lineNo++
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		var job batchJob
-		if err := json.Unmarshal([]byte(line), &job); err != nil {
-			res := batchResult{Line: lineNo, Status: "error", Error: fmt.Sprintf("invalid JSON: %v", err)}
-			results = append(results, res)
-			if batchStopOnError {
-				break
+	ctx, cancel := context.WithCancel(command.Context())
+	defer cancel()
+	work := make(chan batchItem)
+	results := make(chan batchResult, len(items))
+	var workers sync.WaitGroup
+	for range batchConcurrency {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for item := range work {
+				result := executeBatchItem(ctx, executable, item)
+				results <- result
+				if batchStopOnError && result.Status == "error" {
+					cancel()
+				}
 			}
-			continue
-		}
-		if strings.TrimSpace(job.Workflow) == "" {
-			res := batchResult{Line: lineNo, ID: job.ID, Status: "error", Error: "workflow is required"}
-			results = append(results, res)
-			if batchStopOnError {
-				break
+		}()
+	}
+	go func() {
+		defer close(work)
+		for index, item := range items {
+			select {
+			case <-ctx.Done():
+				return
+			case work <- item:
 			}
-			continue
-		}
-
-		args := buildRunArgsFromJob(job)
-		c := exec.Command(exe, args...)
-		var stdout bytes.Buffer
-		var stderr bytes.Buffer
-		c.Stdout = &stdout
-		c.Stderr = &stderr
-
-		if !batchJSON {
-			fmt.Printf("[%d] submitting workflow=%s", lineNo, job.Workflow)
-			if job.ID != "" {
-				fmt.Printf(" id=%s", job.ID)
-			}
-			fmt.Println()
-		}
-
-		err := c.Run()
-		out := stdout.String()
-		errText := strings.TrimSpace(stderr.String())
-
-		res := batchResult{Line: lineNo, ID: job.ID, Workflow: job.Workflow}
-		if pid := extractPromptID(out); pid != "" {
-			res.PromptID = pid
-		}
-		if err != nil {
-			res.Status = "error"
-			if errText == "" {
-				errText = strings.TrimSpace(out)
-			}
-			if errText == "" {
-				errText = err.Error()
-			}
-			res.Error = errText
-			results = append(results, res)
-			if !batchJSON {
-				fmt.Printf("[%d] error: %s\n", lineNo, errText)
-			}
-			if batchStopOnError {
-				break
-			}
-		} else {
-			res.Status = "ok"
-			results = append(results, res)
-			if !batchJSON {
-				if res.PromptID != "" {
-					fmt.Printf("[%d] ok prompt_id=%s\n", lineNo, res.PromptID)
-				} else {
-					fmt.Printf("[%d] ok\n", lineNo)
+			if batchSubmitDelay > 0 && index < len(items)-1 {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(batchSubmitDelay):
 				}
 			}
 		}
-
-		if batchSubmitDelay > 0 {
-			time.Sleep(batchSubmitDelay)
+	}()
+	go func() {
+		workers.Wait()
+		close(results)
+	}()
+	allResults := append([]batchResult(nil), invalid...)
+	for result := range results {
+		allResults = append(allResults, result)
+	}
+	sort.Slice(allResults, func(i, j int) bool { return allResults[i].Line < allResults[j].Line })
+	if machineJSON {
+		if err := emitJSON(allResults); err != nil {
+			return err
+		}
+	} else {
+		for _, result := range allResults {
+			if result.Status == "error" {
+				humanf("[%d] error: %s\n", result.Line, result.Error)
+			} else {
+				humanf("[%d] %s prompt_id=%s\n", result.Line, result.Status, result.PromptID)
+			}
 		}
 	}
-	if err := scanner.Err(); err != nil {
+	errorCount := 0
+	for _, result := range allResults {
+		if result.Status == "error" {
+			errorCount++
+		}
+	}
+	if !machineJSON {
+		humanf("Batch done: %d ok, %d error\n", len(allResults)-errorCount, errorCount)
+	}
+	if errorCount > 0 {
+		err := fmt.Errorf("batch completed with %d error(s)", errorCount)
+		if machineJSON {
+			return Reported(err)
+		}
 		return err
-	}
-
-	if batchJSON {
-		b, _ := json.MarshalIndent(results, "", "  ")
-		fmt.Println(string(b))
-		return nil
-	}
-
-	okCount := 0
-	errCount := 0
-	for _, r := range results {
-		if r.Status == "ok" {
-			okCount++
-		} else {
-			errCount++
-		}
-	}
-	fmt.Printf("Batch done: %d ok, %d error\n", okCount, errCount)
-	if errCount > 0 {
-		return fmt.Errorf("batch completed with %d error(s)", errCount)
 	}
 	return nil
 }
 
-func buildRunArgsFromJob(job batchJob) []string {
-	args := []string{"run", "-w", job.Workflow}
-
-	if strings.TrimSpace(job.Server) != "" {
-		args = append(args, "--server", job.Server)
+func readBatch(path string) ([]batchItem, []batchResult, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
 	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 1<<20), 10<<20)
+	items := make([]batchItem, 0, 16)
+	invalid := make([]batchResult, 0)
+	lineNumber := 0
+	for scanner.Scan() {
+		lineNumber++
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		var job batchJob
+		if err := json.Unmarshal([]byte(line), &job); err != nil {
+			invalid = append(invalid, batchResult{Line: lineNumber, Status: "error", Error: fmt.Sprintf("invalid JSON: %v", err)})
+			continue
+		}
+		if strings.TrimSpace(job.Workflow) == "" {
+			invalid = append(invalid, batchResult{Line: lineNumber, ID: job.ID, Status: "error", Error: "workflow is required"})
+			continue
+		}
+		items = append(items, batchItem{line: lineNumber, job: job})
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, nil, err
+	}
+	return items, invalid, nil
+}
 
+func executeBatchItem(ctx context.Context, executable string, item batchItem) batchResult {
+	arguments := buildRunArgsFromJob(item.job)
+	command := exec.CommandContext(ctx, executable, arguments...)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	err := command.Run()
+	result := batchResult{Line: item.line, ID: item.job.ID, Workflow: item.job.Workflow}
+	if err != nil {
+		result.Status = "error"
+		result.Error = boundedText(stderr.String(), stdout.String(), err.Error())
+		return result
+	}
+	var job jobs.Record
+	if err := json.Unmarshal(stdout.Bytes(), &job); err != nil {
+		result.Status = "error"
+		result.Error = "child cmfy returned invalid JSON: " + err.Error()
+		return result
+	}
+	result.PromptID = job.PromptID
+	result.Status = job.Status
+	if result.Status == "" {
+		result.Status = "ok"
+	}
+	return result
+}
+
+func buildRunArgsFromJob(job batchJob) []string {
+	arguments := []string{"--json"}
+	if cfgFile != "" {
+		arguments = append(arguments, "--config", cfgFile)
+	}
+	if stateDir != "" {
+		arguments = append(arguments, "--state-dir", stateDir)
+	}
+	if serverProfile != "" {
+		arguments = append(arguments, "--profile", serverProfile)
+	}
+	arguments = append(arguments, "run", "-w", job.Workflow)
+	if job.ID != "" {
+		arguments = append(arguments, "--request-id", job.ID)
+	}
+	if strings.TrimSpace(job.Server) != "" {
+		arguments = append(arguments, "--server", job.Server)
+	}
 	effectiveAsync := batchAsync
 	if job.Async != nil {
 		effectiveAsync = *job.Async
 	}
 	if effectiveAsync {
-		args = append(args, "--async")
+		arguments = append(arguments, "--async")
 	}
-
 	if strings.TrimSpace(job.Timeout) != "" {
-		args = append(args, "--timeout", strings.TrimSpace(job.Timeout))
+		arguments = append(arguments, "--timeout", strings.TrimSpace(job.Timeout))
 	}
-
-	if len(job.Vars) > 0 {
-		keys := sortedKeys(job.Vars)
-		for _, k := range keys {
-			args = append(args, "--var", fmt.Sprintf("%s=%s", k, job.Vars[k]))
-		}
+	for _, key := range sortedKeys(job.Vars) {
+		arguments = append(arguments, "--var", fmt.Sprintf("%s=%s", key, job.Vars[key]))
 	}
-
-	if len(job.Set) > 0 {
-		keys := sortedAnyKeys(job.Set)
-		for _, k := range keys {
-			args = append(args, "--set", fmt.Sprintf("%s=%s", k, anyToString(job.Set[k])))
-		}
+	for _, key := range sortedAnyKeys(job.Set) {
+		arguments = append(arguments, "--set", fmt.Sprintf("%s=%s", key, anyToString(job.Set[key])))
 	}
-
-	for _, v := range job.Image {
-		args = append(args, "--image", v)
+	for _, value := range job.Image {
+		arguments = append(arguments, "--image", value)
 	}
-	for _, v := range job.Mask {
-		args = append(args, "--mask", v)
+	for _, value := range job.Mask {
+		arguments = append(arguments, "--mask", value)
 	}
-	for _, v := range job.Input {
-		args = append(args, "--input", v)
+	for _, value := range job.Input {
+		arguments = append(arguments, "--input", value)
 	}
-
-	return args
+	return arguments
 }
 
-func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
+func sortedKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 	return keys
 }
 
-func sortedAnyKeys(m map[string]any) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
+func sortedAnyKeys(values map[string]any) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 	return keys
 }
 
-func anyToString(v any) string {
-	switch t := v.(type) {
+func anyToString(value any) string {
+	switch typed := value.(type) {
 	case string:
-		return t
+		return typed
 	case float64:
-		if t == float64(int64(t)) {
-			return fmt.Sprintf("%d", int64(t))
+		if typed == float64(int64(typed)) {
+			return fmt.Sprintf("%d", int64(typed))
 		}
-		return fmt.Sprintf("%v", t)
+		return fmt.Sprintf("%v", typed)
 	default:
-		return fmt.Sprintf("%v", t)
+		return fmt.Sprintf("%v", typed)
 	}
 }
 
-func extractPromptID(out string) string {
-	for _, ln := range strings.Split(out, "\n") {
-		ln = strings.TrimSpace(ln)
-		if strings.HasPrefix(ln, "Prompt ID:") {
-			return strings.TrimSpace(strings.TrimPrefix(ln, "Prompt ID:"))
+func boundedText(candidates ...string) string {
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
 		}
+		if len(candidate) > 4096 {
+			return candidate[:4096]
+		}
+		return candidate
 	}
-	return ""
+	return "batch job failed"
 }
 
-func runBatchExample(cmd *cobra.Command, args []string) error {
+func errorsNew(message string) error { return fmt.Errorf("%s", message) }
+
+func runBatchExample(_ *cobra.Command, _ []string) error {
 	switch strings.ToLower(strings.TrimSpace(batchExampleMode)) {
 	case "minimal":
 		fmt.Println(`{"workflow":"txt2img","vars":{"PROMPT":"sks man cinematic portrait","OUTPUT":"batch/sks_001"}}`)
 	case "full":
-		fmt.Println(`{"id":"job-001","workflow":"/Users/tommyfalkowski/cmfy/workflows/image_to_video_ltx2_3_i2v_with_sound.json","vars":{"PROMPT":"cinematic close-up, subtle camera motion","OUTPUT":"video/ltx23_batch_001"},"set":{"167:146.inputs.value":121},"image":["/Users/tommyfalkowski/cmfy/outputs/cmfy_movie_madness_00001_.png"],"server":"http://127.0.0.1:8188","async":true,"timeout":"30m"}`)
+		fmt.Println(`{"id":"job-001","workflow":"image_to_video_ltx2_3_i2v_with_sound","vars":{"PROMPT":"cinematic close-up","OUTPUT":"video/ltx23_batch_001"},"image":["input.png"],"async":true,"timeout":"30m"}`)
 	case "mixed-workflows", "mixed":
-		fmt.Println(`{"id":"img-1","workflow":"txt2img","vars":{"PROMPT":"sks man movie poster","OUTPUT":"batch/poster_001"},"set":{"12.inputs.steps":28},"async":true}`)
-		fmt.Println(`{"id":"vid-1","workflow":"/Users/tommyfalkowski/cmfy/workflows/image_to_video_ltx2_3_i2v_with_sound.json","vars":{"PROMPT":"cinematic talking head shot","OUTPUT":"video/ltx23_vid_001"},"set":{"167:146.inputs.value":121},"image":["/Users/tommyfalkowski/cmfy/outputs/cmfy_movie_madness_00001_.png"],"async":true}`)
+		fmt.Println(`{"id":"img-1","workflow":"txt2img","vars":{"PROMPT":"sks man movie poster","OUTPUT":"batch/poster_001"},"async":true}`)
+		fmt.Println(`{"id":"vid-1","workflow":"img2vid","vars":{"PROMPT":"cinematic talking head shot","OUTPUT":"video/ltx23_vid_001"},"image":["input.png"],"async":true}`)
 	default:
 		return fmt.Errorf("invalid --mode %q, use minimal|full|mixed-workflows", batchExampleMode)
 	}

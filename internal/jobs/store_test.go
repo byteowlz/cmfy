@@ -2,6 +2,7 @@ package jobs_test
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -104,5 +105,63 @@ func TestStoreDeduplicatesRequestID(t *testing.T) {
 	}
 	if duplicate.ID != original.ID || duplicate.Prompt != "original" {
 		t.Fatalf("duplicate changed reservation: original=%#v duplicate=%#v", original, duplicate)
+	}
+}
+
+func TestPruneRemovesOnlyOldTerminalJobs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := jobs.Open(filepath.Join(t.TempDir(), "history.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	old := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, submission := range []jobs.Submission{
+		{RequestID: "completed", ServerID: "server", Workflow: "one", SubmittedAt: old},
+		{RequestID: "running", ServerID: "server", Workflow: "two", SubmittedAt: old},
+	} {
+		if _, _, err := store.Reserve(ctx, submission); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Update(ctx, "completed", jobs.Update{Status: "completed", UpdatedAt: old}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Update(ctx, "running", jobs.Update{Status: "running", UpdatedAt: old}); err != nil {
+		t.Fatal(err)
+	}
+	count, err := store.Prune(ctx, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), 0)
+	if err != nil || count != 1 {
+		t.Fatalf("prune count=%d err=%v", count, err)
+	}
+	if _, err := store.Get(ctx, "running"); err != nil {
+		t.Fatalf("running job was pruned: %v", err)
+	}
+	if _, err := store.Get(ctx, "completed"); !errors.Is(err, jobs.ErrNotFound) {
+		t.Fatalf("completed job remains: %v", err)
+	}
+}
+
+func TestUploadCacheRoundTrip(t *testing.T) {
+	t.Parallel()
+	store, err := jobs.Open(filepath.Join(t.TempDir(), "state", "history.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if err := store.PutUpload(ctx, jobs.Upload{ServerID: "server-1", SHA256: "abc", RemoteName: "input.png", Size: 42}); err != nil {
+		t.Fatal(err)
+	}
+	upload, found, err := store.GetUpload(ctx, "server-1", "abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || upload.RemoteName != "input.png" || upload.Size != 42 {
+		t.Fatalf("unexpected upload: %#v, found=%v", upload, found)
+	}
+	if _, found, err := store.GetUpload(ctx, "server-2", "abc"); err != nil || found {
+		t.Fatalf("cache leaked across servers: found=%v err=%v", found, err)
 	}
 }

@@ -39,6 +39,14 @@ type Input struct {
 	Size   int64  `json:"size,omitempty"`
 }
 
+type Upload struct {
+	ServerID   string    `json:"server_id"`
+	SHA256     string    `json:"sha256"`
+	RemoteName string    `json:"remote_name"`
+	Size       int64     `json:"size"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
 type Output struct {
 	Filename  string `json:"filename"`
 	Subfolder string `json:"subfolder,omitempty"`
@@ -168,6 +176,14 @@ func (s *Store) initialize(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS jobs_submitted_idx ON jobs(submitted_at DESC, id DESC)`,
 		`CREATE INDEX IF NOT EXISTS jobs_status_idx ON jobs(status, submitted_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS jobs_server_idx ON jobs(server_id, submitted_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS upload_cache (
+			server_id TEXT NOT NULL,
+			sha256 TEXT NOT NULL,
+			remote_name TEXT NOT NULL,
+			size INTEGER NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY(server_id, sha256)
+		)`,
 	}
 	for _, statement := range statements {
 		if _, err := s.db.ExecContext(ctx, statement); err != nil {
@@ -186,6 +202,83 @@ func (s *Store) initialize(ctx context.Context) error {
 
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+func (s *Store) GetUpload(ctx context.Context, serverID, sha256 string) (Upload, bool, error) {
+	var upload Upload
+	var updatedAt string
+	err := s.db.QueryRowContext(ctx, `SELECT server_id, sha256, remote_name, size, updated_at FROM upload_cache WHERE server_id = ? AND sha256 = ?`, serverID, sha256).Scan(&upload.ServerID, &upload.SHA256, &upload.RemoteName, &upload.Size, &updatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Upload{}, false, nil
+	}
+	if err != nil {
+		return Upload{}, false, fmt.Errorf("read upload cache: %w", err)
+	}
+	upload.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt)
+	if err != nil {
+		return Upload{}, false, err
+	}
+	return upload, true, nil
+}
+
+func (s *Store) PutUpload(ctx context.Context, upload Upload) error {
+	if upload.ServerID == "" || upload.SHA256 == "" || upload.RemoteName == "" {
+		return errors.New("server_id, sha256, and remote_name are required for upload cache")
+	}
+	if upload.UpdatedAt.IsZero() {
+		upload.UpdatedAt = time.Now().UTC()
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO upload_cache(server_id, sha256, remote_name, size, updated_at) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(server_id, sha256) DO UPDATE SET remote_name = excluded.remote_name, size = excluded.size, updated_at = excluded.updated_at`,
+		upload.ServerID, upload.SHA256, upload.RemoteName, upload.Size, formatTime(upload.UpdatedAt))
+	if err != nil {
+		return fmt.Errorf("write upload cache: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) CountPrunable(ctx context.Context, before time.Time, keepRecent int) (int64, error) {
+	query := `SELECT COUNT(*) FROM jobs WHERE status IN ('completed','success','failed','error','cancelled','not_found') AND updated_at < ?`
+	arguments := []any{formatTime(before.UTC())}
+	if keepRecent > 0 {
+		query += ` AND id NOT IN (SELECT id FROM jobs ORDER BY submitted_at DESC, id DESC LIMIT ?)`
+		arguments = append(arguments, keepRecent)
+	}
+	var count int64
+	if err := s.db.QueryRowContext(ctx, query, arguments...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count prunable jobs: %w", err)
+	}
+	return count, nil
+}
+
+func (s *Store) Prune(ctx context.Context, before time.Time, keepRecent int) (int64, error) {
+	query := `DELETE FROM jobs WHERE status IN ('completed','success','failed','error','cancelled','not_found') AND updated_at < ?`
+	arguments := []any{formatTime(before.UTC())}
+	if keepRecent > 0 {
+		query += ` AND id NOT IN (SELECT id FROM jobs ORDER BY submitted_at DESC, id DESC LIMIT ?)`
+		arguments = append(arguments, keepRecent)
+	}
+	result, err := s.db.ExecContext(ctx, query, arguments...)
+	if err != nil {
+		return 0, fmt.Errorf("prune jobs: %w", err)
+	}
+	return result.RowsAffected()
+}
+
+func (s *Store) CountPrunableUploads(ctx context.Context, before time.Time) (int64, error) {
+	var count int64
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM upload_cache WHERE updated_at < ?`, formatTime(before.UTC())).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count prunable uploads: %w", err)
+	}
+	return count, nil
+}
+
+func (s *Store) PruneUploads(ctx context.Context, before time.Time) (int64, error) {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM upload_cache WHERE updated_at < ?`, formatTime(before.UTC()))
+	if err != nil {
+		return 0, fmt.Errorf("prune upload cache: %w", err)
+	}
+	return result.RowsAffected()
 }
 
 func (s *Store) Reserve(ctx context.Context, submission Submission) (Record, bool, error) {
@@ -252,15 +345,24 @@ func (s *Store) Update(ctx context.Context, id string, update Update) error {
 	if strings.TrimSpace(update.Status) == "" {
 		return errors.New("status is required")
 	}
-	outputs, err := json.Marshal(nonNilOutputs(update.Outputs))
-	if err != nil {
-		return fmt.Errorf("encode outputs: %w", err)
+	var outputs []byte
+	var err error
+	if update.Outputs != nil {
+		outputs, err = json.Marshal(update.Outputs)
+		if err != nil {
+			return fmt.Errorf("encode outputs: %w", err)
+		}
 	}
 	when := update.UpdatedAt.UTC()
 	if when.IsZero() {
 		when = time.Now().UTC()
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET status = ?, outputs_json = ?, error = ?, updated_at = ?, revision = revision + 1 WHERE prompt_id = ? OR request_id = ?`, update.Status, string(outputs), update.Error, formatTime(when), id, id)
+	var result sql.Result
+	if outputs == nil {
+		result, err = s.db.ExecContext(ctx, `UPDATE jobs SET status = ?, error = ?, updated_at = ?, revision = revision + 1 WHERE prompt_id = ? OR request_id = ?`, update.Status, update.Error, formatTime(when), id, id)
+	} else {
+		result, err = s.db.ExecContext(ctx, `UPDATE jobs SET status = ?, outputs_json = ?, error = ?, updated_at = ?, revision = revision + 1 WHERE prompt_id = ? OR request_id = ?`, update.Status, string(outputs), update.Error, formatTime(when), id, id)
+	}
 	if err != nil {
 		return fmt.Errorf("update job: %w", err)
 	}

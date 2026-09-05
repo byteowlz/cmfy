@@ -1,16 +1,15 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
-	"cmfy/internal/comfy"
 	"cmfy/internal/config"
-	"cmfy/internal/workflow"
+	"cmfy/internal/engine"
+	"cmfy/internal/jobs"
 
 	"github.com/spf13/cobra"
 )
@@ -44,8 +43,10 @@ var (
 	images       []string
 	masks        []string
 	inputs       []string
-	runAsync   bool
-	runTimeout time.Duration
+	runAsync     bool
+	runPlan      bool
+	runRequestID string
+	runTimeout   time.Duration
 )
 
 var runCmd = &cobra.Command{
@@ -61,16 +62,16 @@ func init() {
 	runCmd.Flags().StringVar(&baseURL, "server", "", "Override ComfyUI server URL")
 	runCmd.Flags().StringVarP(&outDir, "output", "o", "", "Output directory override")
 	runCmd.Flags().StringVar(&outDir, "output-dir", "", "Output directory override (alias for --output)")
-	runCmd.Flags().StringVar(&outputName, "output-name", "", "Convenience: sets ${OUTPUT} for filename_prefix")
-	runCmd.Flags().StringVar(&promptText, "prompt", "", "Convenience: sets ${PROMPT}")
-	runCmd.Flags().StringVar(&tagsText, "tags", "", "Convenience: sets ${TAGS} (txt2music)")
-	runCmd.Flags().StringVar(&lyricsText, "lyrics", "", "Convenience: sets ${LYRICS} (txt2music)")
-	runCmd.Flags().IntVar(&maxTokens, "max-tokens", 0, "Convenience: sets ${MAX_TOKENS} (VoxCPM2 audio length)")
-	runCmd.Flags().IntVar(&seed, "seed", 0, "Convenience: sets ${SEED}")
-	runCmd.Flags().IntVar(&width, "width", 0, "Convenience: sets ${WIDTH}")
-	runCmd.Flags().IntVar(&height, "height", 0, "Convenience: sets ${HEIGHT}")
-	runCmd.Flags().IntVar(&steps, "steps", 0, "Convenience: sets ${STEPS} and sampler inputs if mapped")
-	runCmd.Flags().Float64Var(&cfgScale, "cfg", 0, "Convenience: sets ${CFG} and sampler inputs if mapped")
+	runCmd.Flags().StringVar(&outputName, "output-name", "", "Set ${OUTPUT} for filename_prefix")
+	runCmd.Flags().StringVar(&promptText, "prompt", "", "Set ${PROMPT}")
+	runCmd.Flags().StringVar(&tagsText, "tags", "", "Set ${TAGS} (txt2music)")
+	runCmd.Flags().StringVar(&lyricsText, "lyrics", "", "Set ${LYRICS} (txt2music)")
+	runCmd.Flags().IntVar(&maxTokens, "max-tokens", 0, "Set ${MAX_TOKENS} (VoxCPM2 audio length)")
+	runCmd.Flags().IntVar(&seed, "seed", 0, "Set ${SEED}")
+	runCmd.Flags().IntVar(&width, "width", 0, "Set ${WIDTH}")
+	runCmd.Flags().IntVar(&height, "height", 0, "Set ${HEIGHT}")
+	runCmd.Flags().IntVar(&steps, "steps", 0, "Set ${STEPS} and mapped sampler inputs")
+	runCmd.Flags().Float64Var(&cfgScale, "cfg", 0, "Set ${CFG} and mapped sampler inputs")
 	runCmd.Flags().StringVar(&sampler, "sampler", "", "Set sampler_name on sampler nodes")
 	runCmd.Flags().StringVar(&scheduler, "scheduler", "", "Set scheduler on sampler nodes")
 	runCmd.Flags().Float64Var(&denoise, "denoise", -1, "Set denoise on sampler nodes")
@@ -81,266 +82,239 @@ func init() {
 	runCmd.Flags().Float64Var(&refStrength, "refiner-strength", -1, "Set strength on refiner nodes")
 	runCmd.Flags().IntVar(&refSteps, "refiner-steps", 0, "Set steps on refiner node")
 	runCmd.Flags().Float64Var(&refCfg, "refiner-cfg", 0, "Set cfg on refiner node")
-	runCmd.Flags().StringArrayVar(&varList, "var", []string{}, "Template var override KEY=VAL (repeatable)")
-	runCmd.Flags().StringArrayVar(&setList, "set", []string{}, "Set path=value at '<nodeID>.inputs.<name>' (repeatable)")
-	runCmd.Flags().StringArrayVar(&images, "image", []string{}, "Upload image file and expose ${IMAGEn} (repeatable)")
-	runCmd.Flags().StringArrayVar(&masks, "mask", []string{}, "Upload mask file and expose ${MASKn} (repeatable)")
-	runCmd.Flags().StringArrayVar(&inputs, "input", []string{}, "Upload generic input file and expose ${INPUTn} (repeatable)")
-	runCmd.Flags().BoolVar(&runAsync, "async", false, "Submit and return prompt ID without waiting")
+	runCmd.Flags().StringArrayVar(&varList, "var", []string{}, "Template variable KEY=VALUE (repeatable)")
+	runCmd.Flags().StringArrayVar(&setList, "set", []string{}, "Set <nodeID>.inputs.<name>=value (repeatable)")
+	runCmd.Flags().StringArrayVar(&images, "image", []string{}, "Upload image and expose ${IMAGE}/${IMAGEn} (repeatable)")
+	runCmd.Flags().StringArrayVar(&masks, "mask", []string{}, "Upload mask and expose ${MASK}/${MASKn} (repeatable)")
+	runCmd.Flags().StringArrayVar(&inputs, "input", []string{}, "Upload input and expose ${INPUT}/${INPUTn} (repeatable)")
+	runCmd.Flags().BoolVar(&runAsync, "async", false, "Submit and return without waiting")
+	runCmd.Flags().BoolVar(&runPlan, "plan", false, "Resolve locally and validate required nodes against the target server without submitting")
+	runCmd.Flags().StringVar(&runRequestID, "request-id", "", "Idempotency key for this submission")
 	runCmd.Flags().DurationVar(&runTimeout, "timeout", 30*time.Minute, "Maximum wait time when not async")
 }
 
-func runWorkflow(cmd *cobra.Command, args []string) error {
+func runWorkflow(command *cobra.Command, args []string) error {
 	if workflowName == "--help" || workflowName == "-h" || workflowName == "help" {
-		cmd.Help()
-		return nil
+		return command.Help()
 	}
-
-	if workflowName == "" && len(args) > 0 {
-		workflowName = args[0]
+	selectedWorkflow := workflowName
+	if selectedWorkflow == "" && len(args) > 0 {
+		selectedWorkflow = args[0]
 	}
-
-	if workflowName == "" {
-		cfg, _ := config.Load()
-		workflowName = cfg.DefaultWorkflow
-		if workflowName == "" {
-			return errors.New("no workflow specified (-w) and no default_workflow in config")
-		}
-	}
-
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
-	if baseURL != "" {
-		cfg.ServerURL = baseURL
+	if selectedWorkflow == "" {
+		selectedWorkflow = cfg.DefaultWorkflow
+	}
+	if selectedWorkflow == "" {
+		return errors.New("no workflow specified (-w) and no default_workflow in config")
+	}
+	if err := selectServer(cfg, baseURL); err != nil {
+		return err
 	}
 	if outDir != "" {
 		cfg.OutputDir = outDir
 	}
-	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
-		return err
-	}
-
-	aliasUsed := ""
-	if wf, ok := resolveAliasMaybe(workflowName); ok {
-		aliasUsed = workflowName
-		workflowName = wf
-	}
-	prompt, wfPath, varDefaults, err := workflow.LoadWithVars(cfg.WorkflowsDir, workflowName)
+	variables, err := runVariables(cfg)
 	if err != nil {
 		return err
 	}
-	// Remove metadata blocks so ComfyUI doesn't treat them as nodes
-	delete(prompt, "#variables")
-	delete(prompt, "variables")
-	delete(prompt, "prompt_guidelines")
-	delete(prompt, "guidelines")
-
-	vars := map[string]string{}
-	for k, v := range cfg.Vars {
-		vars[k] = v
+	parameters := runParameters()
+	request := engine.Request{
+		RequestID:  runRequestID,
+		Workflow:   selectedWorkflow,
+		Prompt:     promptText,
+		Variables:  variables,
+		Sets:       append([]string(nil), setList...),
+		Parameters: parameters,
+		Images:     append([]string(nil), images...),
+		Masks:      append([]string(nil), masks...),
+		Inputs:     append([]string(nil), inputs...),
+		OutputDir:  cfg.OutputDir,
 	}
-	wfName := strings.TrimSuffix(filepath.Base(wfPath), filepath.Ext(wfPath))
-	if wv, ok := cfg.WorkflowVars[wfName]; ok {
-		for k, v := range wv {
-			vars[k] = v
-		}
-	}
-	if outputName != "" {
-		vars["OUTPUT"] = outputName
-	} else if cfg.DefaultOutputName != "" {
-		vars["OUTPUT"] = cfg.DefaultOutputName
-	}
-	if promptText != "" {
-		vars["PROMPT"] = promptText
-	}
-	if tagsText != "" {
-		vars["TAGS"] = tagsText
-	}
-	if lyricsText != "" {
-		vars["LYRICS"] = lyricsText
-	}
-	if maxTokens != 0 {
-		vars["MAX_TOKENS"] = fmt.Sprintf("%d", maxTokens)
-	}
-	if seed != 0 {
-		vars["SEED"] = fmt.Sprintf("%d", seed)
-	} else {
-		vars["SEED"] = fmt.Sprintf("%d", time.Now().UnixNano())
-	}
-	if width != 0 {
-		vars["WIDTH"] = fmt.Sprintf("%d", width)
-	} else if cfg.DefaultWidth != 0 {
-		vars["WIDTH"] = fmt.Sprintf("%d", cfg.DefaultWidth)
-	}
-	if height != 0 {
-		vars["HEIGHT"] = fmt.Sprintf("%d", height)
-	} else if cfg.DefaultHeight != 0 {
-		vars["HEIGHT"] = fmt.Sprintf("%d", cfg.DefaultHeight)
-	}
-	if steps != 0 {
-		vars["STEPS"] = fmt.Sprintf("%d", steps)
-	} else if cfg.DefaultSteps != 0 {
-		vars["STEPS"] = fmt.Sprintf("%d", cfg.DefaultSteps)
-	}
-	if cfgScale != 0 {
-		vars["CFG"] = trimFloat(cfgScale)
-	}
-	if _, ok := vars["FRAME_RATE"]; !ok {
-		vars["FRAME_RATE"] = "25"
-	}
-	if _, ok := vars["LENGTH"]; !ok {
-		vars["LENGTH"] = "121"
-	}
-	for _, kv := range varList {
-		k, v, ok := splitKV(kv)
-		if !ok {
-			return fmt.Errorf("--var expects KEY=VAL, got %q", kv)
-		}
-		vars[k] = v
-	}
-
-	client := comfy.NewClient(cfg.ServerURL)
-
-	if len(images) > 0 {
-		for i, p := range images {
-			fmt.Printf("Uploading %s...\n", p)
-			name, err := client.Upload(p)
-			if err != nil {
-				return fmt.Errorf("upload image %s: %w", p, err)
-			}
-			fmt.Printf("Uploaded as %s\n", name)
-			vars[fmt.Sprintf("IMAGE%d", i+1)] = name
-			if i == 0 {
-				vars["IMAGE"] = name
-			}
-		}
-	}
-	if len(masks) > 0 {
-		for i, p := range masks {
-			name, err := client.Upload(p)
-			if err != nil {
-				return fmt.Errorf("upload mask %s: %w", p, err)
-			}
-			vars[fmt.Sprintf("MASK%d", i+1)] = name
-			if i == 0 {
-				vars["MASK"] = name
-			}
-		}
-	}
-	if len(inputs) > 0 {
-		for i, p := range inputs {
-			name, err := client.Upload(p)
-			if err != nil {
-				return fmt.Errorf("upload input %s: %w", p, err)
-			}
-			vars[fmt.Sprintf("INPUT%d", i+1)] = name
-			if i == 0 {
-				vars["INPUT"] = name
-			}
-		}
-	}
-
-	workflow.ApplyVarsWithDefaults(prompt, vars, varDefaults)
-	if err := workflow.ApplySets(prompt, setList); err != nil {
-		return err
-	}
-
-	params := map[string]any{}
-	if sampler != "" {
-		params["sampler_name"] = sampler
-	}
-	if scheduler != "" {
-		params["scheduler"] = scheduler
-	}
-	if denoise >= 0 {
-		params["denoise"] = denoise
-	}
-	if strength >= 0 {
-		params["strength"] = strength
-	}
-	if steps > 0 {
-		params["steps"] = steps
-	}
-	if cfgScale > 0 {
-		params["cfg"] = cfgScale
-	}
-	if refSampler != "" {
-		params["refiner.sampler_name"] = refSampler
-	}
-	if refScheduler != "" {
-		params["refiner.scheduler"] = refScheduler
-	}
-	if refDenoise >= 0 {
-		params["refiner.denoise"] = refDenoise
-	}
-	if refStrength >= 0 {
-		params["refiner.strength"] = refStrength
-	}
-	if refSteps > 0 {
-		params["refiner.steps"] = refSteps
-	}
-	if refCfg > 0 {
-		params["refiner.cfg"] = refCfg
-	}
-	if err := applyStandardParams(cfg, aliasUsed, prompt, params); err != nil {
-		return err
-	}
-
-	clientID := fmt.Sprintf("cmfy-%d", time.Now().UnixNano())
-	fmt.Println("Submitting workflow...")
-	promptID, err := client.Prompt(clientID, prompt)
+	service := engine.New(engine.Options{Config: cfg})
+	plan, err := service.Resolve(command.Context(), request)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Prompt ID: %s\n", promptID)
-
-	if runAsync {
-		fmt.Println("Submitted asynchronously. Use 'cmfy job wait --download", promptID+"' to collect outputs.")
-		return nil
-	}
-
-	return waitAndDownload(client, cfg, promptID, runTimeout)
-}
-
-// waitAndDownload polls History until the prompt completes, then downloads outputs.
-func waitAndDownload(client *comfy.Client, cfg *config.Config, promptID string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	lastState := ""
-	fmt.Println("Waiting for completion...")
-	for {
-		if time.Now().After(deadline) {
-			return errors.New("timeout waiting for prompt to complete")
-		}
-		hist, err := client.History(promptID)
+	if runPlan {
+		client, err := configuredClient(cfg)
 		if err != nil {
 			return err
 		}
-		entry, _ := hist[promptID].(map[string]any)
-		if entry == nil {
-			time.Sleep(1 * time.Second)
-			continue
+		service = engine.New(engine.Options{Config: cfg, Client: client})
+		serverValidation, err := service.ValidateServer(command.Context(), plan)
+		if err != nil {
+			return err
 		}
-
-		state := parseHistoryState(entry)
-		if state != "" && state != lastState {
-			fmt.Println("status:", state)
-			lastState = state
+		plan.ServerValidation = &serverValidation
+		if err := emitJSON(plan); err != nil {
+			return err
 		}
-		if state == "completed" || state == "success" {
-			outputs := getMap(entry, "outputs")
-			if len(outputs) == 0 {
-				fmt.Println("Workflow completed (no outputs to save)")
-			} else if err := downloadOutputsFromMap(client, outputs, cfg); err != nil {
-				return err
-			}
-			break
+		if !serverValidation.Valid {
+			return Reported(fmt.Errorf("server is missing required node classes: %s", strings.Join(serverValidation.MissingNodeClasses, ", ")))
 		}
-		if state == "failed" || state == "error" {
-			return fmt.Errorf("prompt %s failed", promptID)
-		}
-		time.Sleep(1500 * time.Millisecond)
+		return nil
 	}
+	store, err := openJobStore()
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	client, err := configuredClient(cfg)
+	if err != nil {
+		return err
+	}
+	service = engine.New(engine.Options{Config: cfg, Client: client, Jobs: store, OutputLimits: configuredOutputLimits(cfg)})
+	humanf("Submitting workflow...\n")
+	job, created, err := service.Submit(command.Context(), plan)
+	if err != nil {
+		return err
+	}
+	if !created {
+		humanf("Reusing idempotent request %s\n", job.RequestID)
+	}
+	if runAsync {
+		if machineJSON {
+			return emitJSON(job)
+		}
+		humanf("Prompt ID: %s\n", job.PromptID)
+		humanf("Submitted asynchronously. Use 'cmfy job wait --download %s' to collect outputs.\n", job.PromptID)
+		return nil
+	}
+	if job.Status == "completed" && len(job.Outputs) > 0 {
+		return renderRunResult(job)
+	}
+	ctx, cancel := context.WithTimeout(command.Context(), runTimeout)
+	defer cancel()
+	humanf("Waiting for completion...\n")
+	job, err = service.Wait(ctx, job.PromptID, 1500*time.Millisecond)
+	if err != nil {
+		return err
+	}
+	if !isSuccessfulStatus(job.Status) {
+		if job.Error != "" {
+			return errors.New(job.Error)
+		}
+		return fmt.Errorf("prompt %s ended with status %s", job.PromptID, job.Status)
+	}
+	job, err = service.Collect(ctx, job.PromptID)
+	if err != nil {
+		return err
+	}
+	return renderRunResult(job)
+}
+
+func runVariables(cfg *config.Config) (map[string]string, error) {
+	variables := map[string]string{}
+	if outputName != "" {
+		variables["OUTPUT"] = outputName
+	} else if cfg.DefaultOutputName != "" {
+		variables["OUTPUT"] = cfg.DefaultOutputName
+	}
+	if promptText != "" {
+		variables["PROMPT"] = promptText
+	}
+	if tagsText != "" {
+		variables["TAGS"] = tagsText
+	}
+	if lyricsText != "" {
+		variables["LYRICS"] = lyricsText
+	}
+	if maxTokens != 0 {
+		variables["MAX_TOKENS"] = fmt.Sprintf("%d", maxTokens)
+	}
+	resolvedSeed := seed
+	if resolvedSeed == 0 {
+		resolvedSeed = int(time.Now().UnixNano())
+	}
+	variables["SEED"] = fmt.Sprintf("%d", resolvedSeed)
+	resolvedWidth := width
+	if resolvedWidth == 0 {
+		resolvedWidth = cfg.DefaultWidth
+	}
+	if resolvedWidth != 0 {
+		variables["WIDTH"] = fmt.Sprintf("%d", resolvedWidth)
+	}
+	resolvedHeight := height
+	if resolvedHeight == 0 {
+		resolvedHeight = cfg.DefaultHeight
+	}
+	if resolvedHeight != 0 {
+		variables["HEIGHT"] = fmt.Sprintf("%d", resolvedHeight)
+	}
+	resolvedSteps := steps
+	if resolvedSteps == 0 {
+		resolvedSteps = cfg.DefaultSteps
+	}
+	if resolvedSteps != 0 {
+		variables["STEPS"] = fmt.Sprintf("%d", resolvedSteps)
+	}
+	if cfgScale != 0 {
+		variables["CFG"] = trimFloat(cfgScale)
+	}
+	variables["FRAME_RATE"] = "25"
+	variables["LENGTH"] = "121"
+	for _, pair := range varList {
+		key, value, ok := splitKV(pair)
+		if !ok {
+			return nil, fmt.Errorf("--var expects KEY=VALUE, got %q", pair)
+		}
+		variables[key] = value
+	}
+	return variables, nil
+}
+
+func runParameters() map[string]any {
+	parameters := map[string]any{}
+	setIfString := func(key, value string) {
+		if value != "" {
+			parameters[key] = value
+		}
+	}
+	setIfFloat := func(key string, value float64) {
+		if value >= 0 {
+			parameters[key] = value
+		}
+	}
+	setIfInt := func(key string, value int) {
+		if value > 0 {
+			parameters[key] = value
+		}
+	}
+	setIfString("sampler_name", sampler)
+	setIfString("scheduler", scheduler)
+	setIfFloat("denoise", denoise)
+	setIfFloat("strength", strength)
+	setIfInt("steps", steps)
+	if cfgScale > 0 {
+		parameters["cfg"] = cfgScale
+	}
+	setIfString("refiner.sampler_name", refSampler)
+	setIfString("refiner.scheduler", refScheduler)
+	setIfFloat("refiner.denoise", refDenoise)
+	setIfFloat("refiner.strength", refStrength)
+	setIfInt("refiner.steps", refSteps)
+	if refCfg > 0 {
+		parameters["refiner.cfg"] = refCfg
+	}
+	return parameters
+}
+
+func renderRunResult(job jobs.Record) error {
+	if machineJSON {
+		return emitJSON(job)
+	}
+	humanf("Prompt ID: %s\n", job.PromptID)
+	for _, asset := range job.Outputs {
+		humanf("Saved: %s\n", asset.Path)
+	}
+	humanf("Workflow completed (%d file(s) saved)\n", len(job.Outputs))
 	return nil
+}
+
+func isSuccessfulStatus(status string) bool {
+	return status == "completed" || status == "success"
 }

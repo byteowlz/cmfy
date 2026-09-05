@@ -1,22 +1,22 @@
 package cmd
 
 import (
-	"encoding/json"
+	"context"
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"cmfy/internal/comfy"
 	"cmfy/internal/config"
+	"cmfy/internal/engine"
+	"cmfy/internal/jobs"
+	"cmfy/internal/output"
 
 	"github.com/spf13/cobra"
 )
 
 var (
-	queueJSON   bool
-	jobJSON     bool
 	jobTimeout  time.Duration
 	downloadOut bool
 )
@@ -61,9 +61,6 @@ func init() {
 	jobCmd.AddCommand(jobWaitCmd)
 	jobCmd.AddCommand(jobCancelCmd)
 
-	queueCmd.Flags().BoolVar(&queueJSON, "json", false, "Output as JSON")
-	jobStatusCmd.Flags().BoolVar(&jobJSON, "json", false, "Output as JSON")
-	jobWaitCmd.Flags().BoolVar(&jobJSON, "json", false, "Output as JSON")
 	jobWaitCmd.Flags().DurationVar(&jobTimeout, "timeout", 30*time.Minute, "Maximum wait time")
 	jobWaitCmd.Flags().BoolVar(&downloadOut, "download", false, "Download outputs after completion")
 	jobWaitCmd.Flags().StringVarP(&outDir, "output", "o", "", "Output directory override")
@@ -83,8 +80,14 @@ func queueStatus(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	c := comfy.NewClient(cfg.ServerURL)
-	q, err := c.Queue()
+	if err := selectServer(cfg, ""); err != nil {
+		return err
+	}
+	c, err := configuredClient(cfg)
+	if err != nil {
+		return err
+	}
+	q, err := c.QueueContext(cmd.Context())
 	if err != nil {
 		return err
 	}
@@ -92,15 +95,8 @@ func queueStatus(cmd *cobra.Command, args []string) error {
 	running := queuePromptIDs(q["queue_running"])
 	pending := queuePromptIDs(q["queue_pending"])
 
-	if queueJSON {
-		out := map[string]any{
-			"running": running,
-			"pending": pending,
-			"raw":     q,
-		}
-		b, _ := json.MarshalIndent(out, "", "  ")
-		fmt.Println(string(b))
-		return nil
+	if machineJSON {
+		return emitJSON(map[string]any{"schema": "cmfy/queue-v1", "running": running, "pending": pending})
 	}
 
 	fmt.Printf("Running: %d\n", len(running))
@@ -119,15 +115,22 @@ func jobStatus(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	c := comfy.NewClient(cfg.ServerURL)
+	if err := selectServer(cfg, ""); err != nil {
+		return err
+	}
+	c, err := configuredClient(cfg)
+	if err != nil {
+		return err
+	}
 	status, err := getPromptStatus(c, args[0])
 	if err != nil {
 		return err
 	}
-	if jobJSON {
-		b, _ := json.MarshalIndent(status, "", "  ")
-		fmt.Println(string(b))
-		return nil
+	if err := updateDurableStatus(cmd.Context(), args[0], status.Status); err != nil {
+		return err
+	}
+	if machineJSON {
+		return emitJSON(status)
 	}
 	fmt.Printf("Prompt ID: %s\n", status.PromptID)
 	fmt.Printf("Status: %s\n", status.Status)
@@ -142,11 +145,44 @@ func jobWait(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := selectServer(cfg, ""); err != nil {
+		return err
+	}
 	if outDir != "" {
 		cfg.OutputDir = outDir
 	}
-	c := comfy.NewClient(cfg.ServerURL)
+	c, err := configuredClient(cfg)
+	if err != nil {
+		return err
+	}
 	promptID := args[0]
+	store, err := openJobStore()
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	if _, getErr := store.Get(cmd.Context(), promptID); getErr == nil {
+		service := engine.New(engine.Options{Config: cfg, Client: c, Jobs: store, OutputLimits: configuredOutputLimits(cfg)})
+		ctx, cancel := context.WithTimeout(cmd.Context(), jobTimeout)
+		defer cancel()
+		record, waitErr := service.Wait(ctx, promptID, 1500*time.Millisecond)
+		if waitErr != nil {
+			return waitErr
+		}
+		if downloadOut {
+			record, waitErr = service.Collect(ctx, promptID)
+			if waitErr != nil {
+				return waitErr
+			}
+		}
+		if machineJSON {
+			return emitJSON(record)
+		}
+		humanf("Prompt ID: %s\nStatus: %s\n", record.PromptID, record.Status)
+		return nil
+	} else if !errors.Is(getErr, jobs.ErrNotFound) {
+		return getErr
+	}
 	deadline := time.Now().Add(jobTimeout)
 
 	last := ""
@@ -159,7 +195,7 @@ func jobWait(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		if status.Status != last {
-			if !jobJSON {
+			if !machineJSON && !quiet {
 				fmt.Println("status:", status.Status)
 			}
 			last = status.Status
@@ -175,15 +211,14 @@ func jobWait(cmd *cobra.Command, args []string) error {
 						outputs := getMap(entry, "outputs")
 						if len(outputs) > 0 {
 							if err := downloadOutputsFromMap(c, outputs, cfg); err != nil {
-								fmt.Printf("Warning: failed to download outputs: %v\n", err)
+								return fmt.Errorf("download outputs: %w", err)
 							}
 						}
 					}
 				}
 			}
-			if jobJSON {
-				b, _ := json.MarshalIndent(status, "", "  ")
-				fmt.Println(string(b))
+			if machineJSON {
+				return emitJSON(status)
 			}
 			return nil
 		}
@@ -199,12 +234,40 @@ func jobCancel(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	c := comfy.NewClient(cfg.ServerURL)
-	if err := c.DeleteFromQueue([]string{args[0]}); err != nil {
+	if err := selectServer(cfg, ""); err != nil {
 		return err
 	}
-	fmt.Println("Cancel request sent for prompt:", args[0])
+	c, err := configuredClient(cfg)
+	if err != nil {
+		return err
+	}
+	if err := c.DeleteFromQueueContext(cmd.Context(), []string{args[0]}); err != nil {
+		return err
+	}
+	if err := updateDurableStatus(cmd.Context(), args[0], "cancelled"); err != nil {
+		return err
+	}
+	result := map[string]any{"schema": "cmfy/cancel-v1", "prompt_id": args[0], "status": "cancelled"}
+	if machineJSON {
+		return emitJSON(result)
+	}
+	humanf("Cancel request sent for prompt: %s\n", args[0])
 	return nil
+}
+
+func updateDurableStatus(ctx context.Context, promptID, status string) error {
+	store, err := openJobStore()
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	if _, err := store.Get(ctx, promptID); err != nil {
+		if errors.Is(err, jobs.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	return store.Update(ctx, promptID, jobs.Update{Status: status})
 }
 
 func getPromptStatus(c *comfy.Client, promptID string) (*promptStatus, error) {
@@ -331,49 +394,17 @@ func contains(items []string, target string) bool {
 // "images" (SaveImage), "gifs"/"animated" (AnimateDiff/SaveAnimatedWEBP),
 // "videos" (SaveVideo), "audio" (SaveAudioMP3/SaveAudio). Check all keys that contain file-reference arrays.
 func downloadOutputsFromMap(c *comfy.Client, outputs map[string]any, cfg *config.Config) error {
-	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create output directory: %w", err)
+	descriptors, err := output.Descriptors(outputs)
+	if err != nil {
+		return err
 	}
-	saved := 0
-	outputKeys := []string{"images", "gifs", "animated", "videos", "audio"}
-	for nodeID, out := range outputs {
-		om, ok := out.(map[string]any)
-		if !ok {
-			continue
-		}
-		for _, key := range outputKeys {
-			items, _ := om[key].([]any)
-			for _, iv := range items {
-				im, _ := iv.(map[string]any)
-				filename := getString(im, "filename")
-				subfolder := getString(im, "subfolder")
-				typ := getString(im, "type")
-
-				if filename == "" {
-					fmt.Printf("Warning: empty filename in node %s output\n", nodeID)
-					continue
-				}
-
-				data, err := c.View(filename, subfolder, typ)
-				if err != nil {
-					fmt.Printf("Warning: failed to fetch %s: %v\n", filename, err)
-					continue
-				}
-				outPath := filepath.Join(cfg.OutputDir, filename)
-				if err := os.WriteFile(outPath, data, 0o644); err != nil {
-					return fmt.Errorf("failed to save %s: %w", outPath, err)
-				}
-				fmt.Println("Saved:", outPath)
-				saved++
-			}
-		}
+	assets, err := output.Collect(context.Background(), c, cfg.OutputDir, descriptors, output.Limits{})
+	if err != nil {
+		return err
 	}
-
-	if saved == 0 {
-		fmt.Println("Workflow completed (no outputs saved)")
-	} else {
-		fmt.Printf("Workflow completed (%d file(s) saved)\n", saved)
+	for _, asset := range assets {
+		humanf("Saved: %s\n", asset.Path)
 	}
-
+	humanf("Workflow completed (%d file(s) saved)\n", len(assets))
 	return nil
 }

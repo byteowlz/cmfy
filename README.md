@@ -5,7 +5,11 @@ cmfy is a fast, flexible command‑line tool to run ComfyUI workflows. It loads 
 
 ## Features
 
-- Simple commands: `run`, `batch run` (JSONL mixed workflows), `workflows` (list/show/inspect/assign/ssh-list/ssh-import), `queue`, `job` (status/wait/cancel), `server ping`, `config` (init/path), `version`.
+- One shared execution path for `run`, aliases, batch jobs, durable job operations, and automation adapters: Resolve → Plan → Submit → Observe → Collect.
+- Durable SQLite/WAL job and provenance history with idempotent request IDs, retry, filtering, cursor pagination, cleanup, and restart recovery.
+- Secure bounded HTTP transport, content-hash upload reuse, resumable output collection, containment checks, and collision-safe atomic publication.
+- Versioned JSON results and JSONL progress events suitable for terminal users, agents, and Oqto Apps.
+- Deterministic workflow describe/validate/plan contracts and optional server node dependency validation.
 - Works with local workflow JSONs; supports both raw prompt maps and `{ "prompt": { ... } }` wrappers.
 - Configurable `workflows_dir` and `output_dir` in a TOML config stored under `$XDG_CONFIG_HOME/cmfy/config.toml`.
 - Rich templating via `${KEY}` placeholders across string inputs.
@@ -18,7 +22,7 @@ cmfy is a fast, flexible command‑line tool to run ComfyUI workflows. It loads 
 
 ## Requirements
 
-- Go 1.21+ to build.
+- Go 1.23+ to build.
 - A running ComfyUI server (HTTP API) reachable at `server_url` (default `http://127.0.0.1:8188`).
 
 
@@ -59,12 +63,24 @@ Config keys:
 "$schema" = "https://raw.githubusercontent.com/byteowlz/schemas/refs/heads/main/cmfy/cmfy.config.schema.json"
 
 server_url = "http://127.0.0.1:8188"
+
+# Optional named API endpoint profiles. Credentials must remain in an external
+# credential mechanism; URLs containing userinfo are rejected.
+[servers.local_gpu]
+url = "http://127.0.0.1:8188"
 output_dir = "./outputs"
 workflows_dir = "workflows"
 default_workflow = ""       # optional fallback when -w is omitted
 default_width = 768
 default_height = 768
 default_steps = 28
+
+# Positive transport/materialization bounds (bytes/count)
+max_json_bytes = 8388608
+max_upload_bytes = 1073741824
+max_output_bytes = 536870912
+max_total_output_bytes = 1073741824
+max_output_files = 256
 
 [vars]
 # Global template vars available to all workflows
@@ -130,6 +146,11 @@ Inspect a workflow to discover node IDs, class types, and inputs:
 ./cmfy workflows inspect txt2music --guidelines  # prints optional prompting guidance
 ./cmfy workflows show txt2img      # prints JSON with prompt map
 ./cmfy workflows list              # lists available names in workflows_dir
+./cmfy --json workflows describe txt2img
+./cmfy --json workflows validate txt2img --var PROMPT="a forest owl"
+
+# Resolve parameters/assets and verify required node classes against the target server.
+./cmfy --json run --plan -w txt2img --prompt "a forest owl"
 
 # From SSH-configured remote servers in config.toml
 ./cmfy workflows ssh-list local_gpu
@@ -211,17 +232,16 @@ First‑class sampler/refiner flags:
 
 How first‑class flags are applied:
 
-- If `[standard_workflows_params.<alias>]` mappings exist, flags (e.g., `steps`, `cfg`, `sampler_name`) are written to those exact paths.
-- Otherwise, cmfy uses heuristics:
-  - Base flags set the first node that has a matching input name.
-  - `refiner.*` flags target the second occurrence (common in two‑stage flows).
-- Use `workflows inspect` to find stable node IDs and add precise mappings in config.
+- `[standard_workflows_params.<alias>]` mappings write flags such as `steps`, `cfg`, and `sampler_name` to exact paths.
+- Without a mapping, cmfy applies a parameter only when exactly one workflow node exposes that input.
+- Zero matches or multiple matches fail loudly. cmfy never guesses between nodes; use `workflows inspect` and add an exact mapping.
 
 Outputs:
 
-- Saved to `output_dir` (default `./outputs`).
-- Override per run with `--output`/`-o` or `--output-dir` (all workflow commands, including aliases like `cmfy txt2img`).
-- Filenames are taken from the server’s `/view` endpoint responses.
+- Saved beneath `output_dir` (default `./outputs`); `--output`/`-o` or `--output-dir` overrides it per run.
+- Server filenames and subfolders are validated as relative paths. Absolute paths, traversal, separator tricks, symlink destinations, oversized files, excessive output counts, and aggregate-size overflows fail closed.
+- Downloads stream to same-directory partial files, resume through validated range responses, compute SHA-256, and publish complete files atomically without overwriting unrelated content.
+- Duplicate content reuses its existing path. Different content receives the deterministic suffix `-<sha256-prefix>`.
 
 
 ## Template Variables
@@ -265,11 +285,11 @@ Submit multiple jobs from a JSONL file. Each line can target a different workflo
 # Run batch file
 ./cmfy batch run --file jobs.jsonl --async
 
-# Throttle submission rate (submission delay only, not Comfy execution concurrency)
-./cmfy batch run --file jobs.jsonl --submit-delay 500ms
+# Bound local orchestration concurrency and optionally throttle starts
+./cmfy batch run --file jobs.jsonl --concurrency 4 --submit-delay 500ms
 
-# Machine-readable result summary
-./cmfy batch run --file jobs.jsonl --json
+# Machine-readable result summary (one JSON array)
+./cmfy --json batch run --file jobs.jsonl
 ```
 
 JSONL line schema (core fields):
@@ -283,17 +303,33 @@ JSONL line schema (core fields):
 - `async` (optional): per-line async override
 - `timeout` (optional): per-line wait timeout (e.g. `30m`)
 
-## Server Utilities
+## Durable Jobs and Server Utilities
+
+Job state defaults to `$CMFY_STATE_DIR/history.sqlite3`, then `$XDG_STATE_HOME/cmfy/history.sqlite3`, then `~/.local/state/cmfy/history.sqlite3`. `--state-dir` has highest precedence. Oqto should bind a workspace-specific directory rather than the user's global state. The database uses WAL and mode `0600`; credentials are never persisted.
 
 ```bash
-./cmfy server ping      # checks connectivity to server_url
-./cmfy queue            # show running/pending queue
-./cmfy queue --json     # machine-readable queue status
-./cmfy job status <id>  # check a prompt by ID
-./cmfy job wait <id>    # wait for completion
-./cmfy job cancel <id>  # try to remove from queue
-./cmfy version          # prints CLI version
+./cmfy --json jobs list --limit 50 --status completed
+./cmfy --json jobs show <job-or-prompt-id>
+./cmfy jobs watch --jsonl <job-or-prompt-id>  # WebSocket, polling fallback
+./cmfy --json jobs retry <job-or-prompt-id> --request-id retry-001
+./cmfy jobs prune --older-than 720h --keep-recent 1000 --dry-run
+
+./cmfy server ping
+./cmfy --json server inspect     # nodes, models, digests, supported features
+./cmfy --profile local_gpu server ping
+./cmfy queue
+./cmfy job status <id>           # compatibility surface; updates durable status
+./cmfy job wait <id> --download
+./cmfy job cancel <id>           # records the cancellation outcome
 ```
+
+`jobs list` is newest-first. Its opaque `next_cursor` can be supplied as `--cursor`; page size is bounded to 200.
+
+## Machine Contract
+
+Global `--json` emits exactly one versioned JSON value on stdout for automation-relevant commands. Failures emit one `cmfy/error-v1` value and return non-zero. Human output is suppressed in machine mode. `jobs watch --jsonl` is the streaming exception: it emits one bounded `cmfy/job-event-v1` object per line. `--quiet` suppresses human progress without changing results.
+
+Schemas are versioned by their `schema` field. Additive fields may appear within a schema version; removing or changing field meaning requires a new version. Consumers should ignore unknown fields and must not parse human prose.
 
 
 ## API Endpoints Used
@@ -305,6 +341,9 @@ JSONL line schema (core fields):
 - `POST /queue` — queue manipulation (used for cancel attempts).
 - `GET  /view?filename=...&subfolder=...&type=...` — downloads generated assets.
 - `GET  /system_stats` — used for `server ping`.
+- `GET  /object_info` — server node dependency and capability inspection.
+- `GET  /models[/<folder>]` — bounded model inventory when supported.
+- `GET  /ws?clientId=...` — execution/progress/preview events with polling fallback.
 
 
 ## Tips & Troubleshooting
@@ -313,14 +352,6 @@ JSONL line schema (core fields):
 - If an alias is not set, cmfy will still run it implicitly if `<workflows_dir>/<alias>.json` exists.
 - Use `workflows inspect` to discover inputs; then use `--set` or add mappings under `[standard_workflows_params.<alias>]` for stable behavior.
 - The bundled TOML parser supports keys/strings/ints/floats/bools/arrays and simple sections. If you need advanced TOML features, open an issue to switch to a full TOML library.
-
-
-## Roadmap
-
-- Optional WebSocket progress and live preview support
-- Built‑in templates for popular workflows
-- More first‑class flags (e.g., clip_skip, scheduler params)
-- Richer templating with type hints (e.g., `${WIDTH:int}`)
 
 
 ## Contributing

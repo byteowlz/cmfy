@@ -1,13 +1,19 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/spf13/viper"
 )
+
+type ServerProfile struct {
+	URL string
+}
 
 type RemoteServer struct {
 	Host          string
@@ -27,10 +33,16 @@ type Config struct {
 	DefaultWidth           int
 	DefaultHeight          int
 	DefaultSteps           int
+	MaxJSONBytes           int64
+	MaxUploadBytes         int64
+	MaxOutputBytes         int64
+	MaxTotalOutputBytes    int64
+	MaxOutputFiles         int
 	Vars                   map[string]string
 	WorkflowVars           map[string]map[string]string
 	StandardWorkflows      map[string]string
 	StandardWorkflowParams map[string]map[string]string
+	Servers                map[string]ServerProfile
 	RemoteServers          map[string]RemoteServer
 }
 
@@ -44,15 +56,24 @@ func defaultConfig() *Config {
 		DefaultWidth:           768,
 		DefaultHeight:          768,
 		DefaultSteps:           28,
+		MaxJSONBytes:           8 << 20,
+		MaxUploadBytes:         1 << 30,
+		MaxOutputBytes:         512 << 20,
+		MaxTotalOutputBytes:    1 << 30,
+		MaxOutputFiles:         256,
 		Vars:                   map[string]string{},
 		WorkflowVars:           map[string]map[string]string{},
 		StandardWorkflows:      map[string]string{},
 		StandardWorkflowParams: map[string]map[string]string{},
+		Servers:                map[string]ServerProfile{},
 		RemoteServers:          map[string]RemoteServer{},
 	}
 }
 
 func Path() (string, error) {
+	if override := strings.TrimSpace(os.Getenv("CMFY_CONFIG")); override != "" {
+		return expandPath(override), nil
+	}
 	xdg := os.Getenv("XDG_CONFIG_HOME")
 	if xdg == "" {
 		home, err := os.UserHomeDir()
@@ -148,6 +169,24 @@ func Load() (*Config, error) {
 	if v.IsSet("default_steps") {
 		cfg.DefaultSteps = v.GetInt("default_steps")
 	}
+	if v.IsSet("max_json_bytes") {
+		cfg.MaxJSONBytes = v.GetInt64("max_json_bytes")
+	}
+	if v.IsSet("max_upload_bytes") {
+		cfg.MaxUploadBytes = v.GetInt64("max_upload_bytes")
+	}
+	if v.IsSet("max_output_bytes") {
+		cfg.MaxOutputBytes = v.GetInt64("max_output_bytes")
+	}
+	if v.IsSet("max_total_output_bytes") {
+		cfg.MaxTotalOutputBytes = v.GetInt64("max_total_output_bytes")
+	}
+	if v.IsSet("max_output_files") {
+		cfg.MaxOutputFiles = v.GetInt("max_output_files")
+	}
+	if cfg.MaxJSONBytes <= 0 || cfg.MaxUploadBytes <= 0 || cfg.MaxOutputBytes <= 0 || cfg.MaxTotalOutputBytes <= 0 || cfg.MaxOutputFiles <= 0 {
+		return nil, errors.New("transport and output limits must be positive")
+	}
 
 	if v.IsSet("vars") {
 		vars := v.GetStringMapString("vars")
@@ -193,6 +232,15 @@ func Load() (*Config, error) {
 		}
 	}
 
+	if v.IsSet("servers") {
+		servers := v.GetStringMap("servers")
+		cfg.Servers = make(map[string]ServerProfile, len(servers))
+		for name := range servers {
+			base := fmt.Sprintf("servers.%s", name)
+			cfg.Servers[name] = ServerProfile{URL: strings.TrimSpace(v.GetString(base + ".url"))}
+		}
+	}
+
 	if v.IsSet("remote_servers") {
 		rs := v.GetStringMap("remote_servers")
 		cfg.RemoteServers = make(map[string]RemoteServer, len(rs))
@@ -225,6 +273,11 @@ func (c *Config) ToTOML() string {
 	fmt.Fprintf(&b, "default_width = %d\n", c.DefaultWidth)
 	fmt.Fprintf(&b, "default_height = %d\n", c.DefaultHeight)
 	fmt.Fprintf(&b, "default_steps = %d\n", c.DefaultSteps)
+	fmt.Fprintf(&b, "max_json_bytes = %d\n", c.MaxJSONBytes)
+	fmt.Fprintf(&b, "max_upload_bytes = %d\n", c.MaxUploadBytes)
+	fmt.Fprintf(&b, "max_output_bytes = %d\n", c.MaxOutputBytes)
+	fmt.Fprintf(&b, "max_total_output_bytes = %d\n", c.MaxTotalOutputBytes)
+	fmt.Fprintf(&b, "max_output_files = %d\n", c.MaxOutputFiles)
 	if len(c.Vars) > 0 {
 		fmt.Fprintf(&b, "\n[vars]\n")
 		for k, v := range c.Vars {
@@ -267,6 +320,17 @@ func (c *Config) ToTOML() string {
 			for k, v := range m {
 				fmt.Fprintf(&b, "%s = \"%s\"\n", k, escapeString(v))
 			}
+		}
+	}
+	if len(c.Servers) > 0 {
+		names := make([]string, 0, len(c.Servers))
+		for name := range c.Servers {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			fmt.Fprintf(&b, "\n[servers.%s]\n", name)
+			fmt.Fprintf(&b, "url = \"%s\"\n", escapeString(c.Servers[name].URL))
 		}
 	}
 	if len(c.RemoteServers) > 0 {

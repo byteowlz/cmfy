@@ -34,6 +34,7 @@ type ClientOptions struct {
 	MaxErrorBytes  int64
 	MaxUploadBytes int64
 	MaxOutputBytes int64
+	MaxEventBytes  int64
 }
 
 type Client struct {
@@ -99,6 +100,9 @@ func NewClientWithOptions(baseURL string, options ClientOptions) (*Client, error
 	}
 	if options.MaxOutputBytes <= 0 {
 		options.MaxOutputBytes = defaultMaxOutputBytes
+	}
+	if options.MaxEventBytes <= 0 {
+		options.MaxEventBytes = 1 << 20
 	}
 	httpClient := options.HTTPClient
 	if httpClient == nil {
@@ -331,6 +335,56 @@ func (c *Client) Fetch(ctx context.Context, descriptor output.Descriptor, offset
 		return nil, output.FetchInfo{}, err
 	}
 	return response.Body, output.FetchInfo{Partial: response.StatusCode == http.StatusPartialContent}, nil
+}
+
+func (c *Client) ProbeAssetContext(ctx context.Context, filename, typ string) error {
+	query := url.Values{}
+	query.Set("filename", filename)
+	if typ != "" {
+		query.Set("type", typ)
+	}
+	request, err := c.request(ctx, http.MethodGet, "/view?"+query.Encode(), nil)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Range", "bytes=0-0")
+	response, err := c.HTTP.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusPartialContent {
+		return c.responseError("probe asset", response)
+	}
+	return nil
+}
+
+func (c *Client) ModelFoldersContext(ctx context.Context) ([]string, error) {
+	return c.stringListContext(ctx, "/models", "model folders")
+}
+
+func (c *Client) ModelsContext(ctx context.Context, folder string) ([]string, error) {
+	folder = strings.TrimSpace(folder)
+	if folder == "" || strings.Contains(folder, "/") || strings.Contains(folder, `\\`) || folder == "." || folder == ".." {
+		return nil, errors.New("invalid model folder")
+	}
+	return c.stringListContext(ctx, "/models/"+url.PathEscape(folder), "models")
+}
+
+func (c *Client) stringListContext(ctx context.Context, endpoint, operation string) ([]string, error) {
+	var result []string
+	response, err := c.do(ctx, http.MethodGet, endpoint, nil, operation)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if err := decodeBounded(response.Body, c.maxJSONBytes(), &result, operation+" response"); err != nil {
+		return nil, err
+	}
+	if len(result) > 100_000 {
+		return nil, fmt.Errorf("%s count exceeds limit", operation)
+	}
+	return result, nil
 }
 
 func (c *Client) ObjectInfoContext(ctx context.Context) (map[string]interface{}, error) {

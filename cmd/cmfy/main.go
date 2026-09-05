@@ -9,7 +9,13 @@ import (
 
 func main() {
 	if err := cmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, "Error:", err)
+		if cmd.MachineJSONEnabled() {
+			if !cmd.IsReported(err) {
+				_ = cmd.WriteMachineError(err)
+			}
+		} else {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+		}
 		os.Exit(1)
 	}
 }
